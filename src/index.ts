@@ -1,0 +1,1610 @@
+import { execFile } from "node:child_process";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { deflateSync, inflateSync } from "node:zlib";
+
+const execFileAsync = promisify(execFile);
+
+type PhotonModule = typeof import("@silvia-odwyer/photon-node");
+type PhotonImage = InstanceType<PhotonModule["PhotonImage"]>;
+
+export type ImageInput = Buffer | Uint8Array | ArrayBuffer;
+
+export type ImageMetadata = {
+  width: number;
+  height: number;
+};
+
+export type ImageBackend =
+  | "photon"
+  | "sips"
+  | "imagemagick"
+  | "graphicsmagick"
+  | "ffmpeg";
+
+export type ImageBackendPreference = ImageBackend | "auto";
+
+export type PrismOptions = {
+  backend?: ImageBackendPreference;
+  maxInputPixels?: number;
+  maxOutputPixels?: number;
+  timeoutMs?: number;
+  maxProcessBufferBytes?: number;
+  envBackendVariable?: string;
+};
+
+export type ResizeToJpegOptions = {
+  maxSide: number;
+  quality?: number;
+  withoutEnlargement?: boolean;
+};
+
+export type ResizeToPngOptions = {
+  maxSide: number;
+  compressionLevel?: number;
+  withoutEnlargement?: boolean;
+};
+
+export type OptimizePngOptions = {
+  maxBytes: number;
+  sides?: readonly number[];
+  compressionLevels?: readonly number[];
+};
+
+export type OptimizedPng = {
+  buffer: Buffer;
+  optimizedSize: number;
+  resizeSide: number;
+  compressionLevel: number;
+};
+
+export type Prism = {
+  metadata(input: ImageInput): Promise<ImageMetadata | null>;
+  normalize(input: ImageInput): Promise<Buffer>;
+  toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer>;
+  toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer>;
+  optimizePng(input: ImageInput, options: OptimizePngOptions): Promise<OptimizedPng>;
+  convertHeicToJpeg(input: ImageInput): Promise<Buffer>;
+  hasAlpha(input: ImageInput): Promise<boolean>;
+};
+
+type ImageOperation =
+  | "metadata"
+  | "normalize"
+  | "toJpeg"
+  | "toPng"
+  | "optimizePng"
+  | "convertHeicToJpeg"
+  | "hasAlpha";
+
+type ExternalImageTool =
+  | { backend: "sips"; flavor: "sips"; command: string }
+  | { backend: "imagemagick"; flavor: "magick" | "convert"; command: string }
+  | { backend: "graphicsmagick"; flavor: "gm"; command: string }
+  | { backend: "ffmpeg"; flavor: "ffmpeg"; command: string };
+
+const DEFAULT_MAX_INPUT_PIXELS = 25_000_000;
+const DEFAULT_TIMEOUT_MS = 20_000;
+const DEFAULT_MAX_PROCESS_BUFFER_BYTES = 1024 * 1024;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const DEFAULT_PNG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
+const DEFAULT_PNG_COMPRESSION_LEVELS = [6, 7, 8, 9] as const;
+
+const ISO_BMFF_IMAGE_BRANDS = new Set([
+  "avif",
+  "avis",
+  "heic",
+  "heix",
+  "hevc",
+  "hevx",
+  "heif",
+  "mif1",
+  "msf1",
+]);
+
+const ISO_BMFF_CONTAINER_BOXES = new Set([
+  "edts",
+  "ipco",
+  "iprp",
+  "mdia",
+  "meta",
+  "minf",
+  "moov",
+  "stbl",
+  "trak",
+]);
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+let photonPromise: Promise<PhotonModule> | null = null;
+
+export class PrismUnavailableError extends Error {
+  readonly code = "PRISM_IMAGE_PROCESSOR_UNAVAILABLE";
+  readonly operation: ImageOperation;
+  readonly causes: unknown[];
+
+  constructor(operation: ImageOperation, message: string, causes: unknown[] = []) {
+    super(message, {
+      cause: causes.find((cause): cause is Error => cause instanceof Error),
+    });
+    this.name = "PrismUnavailableError";
+    this.operation = operation;
+    this.causes = causes;
+  }
+}
+
+export function isPrismUnavailableError(error: unknown): error is PrismUnavailableError {
+  return error instanceof PrismUnavailableError;
+}
+
+function toBuffer(input: ImageInput): Buffer {
+  if (input instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(input));
+  }
+  return Buffer.from(input);
+}
+
+function normalizePositiveInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function normalizeOptions(options: PrismOptions): Required<PrismOptions> {
+  return {
+    backend: normalizeBackendPreference(
+      options.backend ?? readBackendPreferenceFromEnv(options.envBackendVariable),
+    ),
+    maxInputPixels: normalizePositiveInteger(
+      options.maxInputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
+      "maxInputPixels",
+    ),
+    maxOutputPixels: normalizePositiveInteger(
+      options.maxOutputPixels ?? options.maxInputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
+      "maxOutputPixels",
+    ),
+    timeoutMs: normalizePositiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs"),
+    maxProcessBufferBytes: normalizePositiveInteger(
+      options.maxProcessBufferBytes ?? DEFAULT_MAX_PROCESS_BUFFER_BYTES,
+      "maxProcessBufferBytes",
+    ),
+    envBackendVariable: options.envBackendVariable ?? "PRISM_IMAGE_BACKEND",
+  };
+}
+
+function readBackendPreferenceFromEnv(name?: string): string | undefined {
+  const envName = name ?? "PRISM_IMAGE_BACKEND";
+  return process.env[envName] ?? process.env.OPENCLAW_IMAGE_BACKEND;
+}
+
+function normalizeBackendPreference(value: string | undefined): ImageBackendPreference {
+  const normalized = value?.trim().toLowerCase();
+  switch (normalized) {
+    case "photon":
+    case "sips":
+    case "imagemagick":
+    case "graphicsmagick":
+    case "ffmpeg":
+      return normalized;
+    case "magick":
+    case "convert":
+      return "imagemagick";
+    case "gm":
+      return "graphicsmagick";
+    default:
+      return "auto";
+  }
+}
+
+function normalizeMetadata(width: number, height: number): ImageMetadata | null {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+}
+
+function readPngMetadata(buffer: Buffer): ImageMetadata | null {
+  if (
+    buffer.length < 24 ||
+    !buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) ||
+    buffer.toString("ascii", 12, 16) !== "IHDR"
+  ) {
+    return null;
+  }
+  return normalizeMetadata(buffer.readUInt32BE(16), buffer.readUInt32BE(20));
+}
+
+function readPngAlphaChannel(buffer: Buffer): boolean | null {
+  if (buffer.length < 29 || readPngMetadata(buffer) === null) {
+    return null;
+  }
+  const colorType = buffer[25];
+  if (colorType === 4 || colorType === 6) {
+    return true;
+  }
+  if (colorType !== 0 && colorType !== 2 && colorType !== 3) {
+    return null;
+  }
+  let offset = 8;
+  while (offset + 8 <= buffer.length) {
+    const chunkLength = buffer.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + chunkLength;
+    const nextOffset = dataEnd + 4;
+    if (dataEnd > buffer.length || nextOffset > buffer.length) {
+      return null;
+    }
+    const chunkType = buffer.toString("ascii", typeStart, typeStart + 4);
+    if (chunkType === "tRNS") {
+      return chunkLength > 0;
+    }
+    if (chunkType === "IDAT" || chunkType === "IEND") {
+      return false;
+    }
+    offset = nextOffset;
+  }
+  return false;
+}
+
+function readGifMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 10) {
+    return null;
+  }
+  const signature = buffer.toString("ascii", 0, 6);
+  if (signature !== "GIF87a" && signature !== "GIF89a") {
+    return null;
+  }
+  return normalizeMetadata(buffer.readUInt16LE(6), buffer.readUInt16LE(8));
+}
+
+function readWebpMetadata(buffer: Buffer): ImageMetadata | null {
+  if (
+    buffer.length < 30 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WEBP"
+  ) {
+    return null;
+  }
+  const chunkType = buffer.toString("ascii", 12, 16);
+  if (chunkType === "VP8X") {
+    return normalizeMetadata(1 + buffer.readUIntLE(24, 3), 1 + buffer.readUIntLE(27, 3));
+  }
+  if (chunkType === "VP8 ") {
+    return normalizeMetadata(buffer.readUInt16LE(26) & 0x3fff, buffer.readUInt16LE(28) & 0x3fff);
+  }
+  if (chunkType === "VP8L") {
+    if (buffer.length < 25 || buffer[20] !== 0x2f) {
+      return null;
+    }
+    const bits =
+      buffer.readUInt8(21) |
+      (buffer.readUInt8(22) << 8) |
+      (buffer.readUInt8(23) << 16) |
+      (buffer.readUInt8(24) << 24);
+    return normalizeMetadata((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1);
+  }
+  return null;
+}
+
+function readBmpMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 26 || buffer.toString("ascii", 0, 2) !== "BM") {
+    return null;
+  }
+  const dibHeaderSize = buffer.readUInt32LE(14);
+  if (dibHeaderSize === 12) {
+    return normalizeMetadata(buffer.readUInt16LE(18), buffer.readUInt16LE(20));
+  }
+  if (dibHeaderSize < 40) {
+    return null;
+  }
+  return normalizeMetadata(buffer.readInt32LE(18), Math.abs(buffer.readInt32LE(22)));
+}
+
+function readTiffUnsignedInteger(buffer: Buffer, offset: number, littleEndian: boolean): number {
+  return littleEndian ? buffer.readUInt16LE(offset) : buffer.readUInt16BE(offset);
+}
+
+function readTiffUnsignedLong(buffer: Buffer, offset: number, littleEndian: boolean): number {
+  return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+}
+
+function readTiffMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 8) {
+    return null;
+  }
+  const byteOrder = buffer.toString("ascii", 0, 2);
+  const littleEndian = byteOrder === "II";
+  if (!littleEndian && byteOrder !== "MM") {
+    return null;
+  }
+  if (readTiffUnsignedInteger(buffer, 2, littleEndian) !== 42) {
+    return null;
+  }
+  let ifdOffset = readTiffUnsignedLong(buffer, 4, littleEndian);
+  let largest: ImageMetadata | null = null;
+  const seen = new Set<number>();
+
+  while (ifdOffset !== 0) {
+    if (seen.has(ifdOffset) || ifdOffset + 2 > buffer.length) {
+      return null;
+    }
+    seen.add(ifdOffset);
+
+    const entryCount = readTiffUnsignedInteger(buffer, ifdOffset, littleEndian);
+    const entriesStart = ifdOffset + 2;
+    const entriesEnd = entriesStart + entryCount * 12;
+    if (entriesEnd + 4 > buffer.length) {
+      return null;
+    }
+
+    let width: number | null = null;
+    let height: number | null = null;
+    for (let index = 0; index < entryCount; index += 1) {
+      const entryOffset = entriesStart + index * 12;
+      const tag = readTiffUnsignedInteger(buffer, entryOffset, littleEndian);
+      if (tag === 330) {
+        return null;
+      }
+      if (tag !== 256 && tag !== 257) {
+        continue;
+      }
+      const type = readTiffUnsignedInteger(buffer, entryOffset + 2, littleEndian);
+      const count = readTiffUnsignedLong(buffer, entryOffset + 4, littleEndian);
+      if (count !== 1 || (type !== 3 && type !== 4)) {
+        continue;
+      }
+      const value =
+        type === 3
+          ? readTiffUnsignedInteger(buffer, entryOffset + 8, littleEndian)
+          : readTiffUnsignedLong(buffer, entryOffset + 8, littleEndian);
+      if (tag === 256) {
+        width = value;
+      } else {
+        height = value;
+      }
+    }
+
+    const metadata = width === null || height === null ? null : normalizeMetadata(width, height);
+    if (!metadata) {
+      return null;
+    }
+    largest = pickLargerImageMetadata(largest, metadata);
+    ifdOffset = readTiffUnsignedLong(buffer, entriesEnd, littleEndian);
+  }
+
+  return largest;
+}
+
+function readIsoBmffBoxSize(buffer: Buffer, offset: number, end: number): number | null {
+  if (offset + 8 > end) {
+    return null;
+  }
+  const size32 = buffer.readUInt32BE(offset);
+  if (size32 === 0) {
+    return end - offset;
+  }
+  if (size32 === 1) {
+    if (offset + 16 > end) {
+      return null;
+    }
+    const size64 = buffer.readBigUInt64BE(offset + 8);
+    return size64 <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(size64) : null;
+  }
+  return size32;
+}
+
+function isIsoBmffImage(buffer: Buffer): boolean {
+  if (buffer.length < 16 || buffer.toString("ascii", 4, 8) !== "ftyp") {
+    return false;
+  }
+  const ftypSize = readIsoBmffBoxSize(buffer, 0, buffer.length);
+  if (!ftypSize || ftypSize < 16 || ftypSize > buffer.length) {
+    return false;
+  }
+  for (let offset = 8; offset + 4 <= ftypSize; offset += 4) {
+    if (ISO_BMFF_IMAGE_BRANDS.has(buffer.toString("ascii", offset, offset + 4))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pickLargerImageMetadata(
+  current: ImageMetadata | null,
+  candidate: ImageMetadata | null,
+): ImageMetadata | null {
+  if (!candidate) {
+    return current;
+  }
+  if (!current) {
+    return candidate;
+  }
+  const currentPixels = BigInt(current.width) * BigInt(current.height);
+  const candidatePixels = BigInt(candidate.width) * BigInt(candidate.height);
+  return candidatePixels > currentPixels ? candidate : current;
+}
+
+function findIsoBmffIspeMetadata(
+  buffer: Buffer,
+  start: number,
+  end: number,
+  depth: number,
+): ImageMetadata | null {
+  if (depth > 8) {
+    return null;
+  }
+  let offset = start;
+  let largest: ImageMetadata | null = null;
+  while (offset + 8 <= end) {
+    const boxSize = readIsoBmffBoxSize(buffer, offset, end);
+    if (!boxSize || boxSize < 8 || offset + boxSize > end) {
+      return null;
+    }
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const headerSize = buffer.readUInt32BE(offset) === 1 ? 16 : 8;
+    const dataStart = offset + headerSize;
+    const boxEnd = offset + boxSize;
+    if (type === "ispe" && dataStart + 12 <= boxEnd) {
+      largest = pickLargerImageMetadata(
+        largest,
+        normalizeMetadata(buffer.readUInt32BE(dataStart + 4), buffer.readUInt32BE(dataStart + 8)),
+      );
+    }
+    if (ISO_BMFF_CONTAINER_BOXES.has(type)) {
+      const childStart = type === "meta" ? dataStart + 4 : dataStart;
+      largest = pickLargerImageMetadata(
+        largest,
+        findIsoBmffIspeMetadata(buffer, childStart, boxEnd, depth + 1),
+      );
+    }
+    offset = boxEnd;
+  }
+  return largest;
+}
+
+function readIsoBmffImageMetadata(buffer: Buffer): ImageMetadata | null {
+  return isIsoBmffImage(buffer) ? findIsoBmffIspeMetadata(buffer, 0, buffer.length, 0) : null;
+}
+
+function readJpegMetadata(buffer: Buffer): ImageMetadata | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+  let offset = 2;
+  while (offset + 8 < buffer.length) {
+    while (offset < buffer.length && buffer[offset] === 0xff) {
+      offset += 1;
+    }
+    if (offset >= buffer.length) {
+      return null;
+    }
+    const marker = buffer.readUInt8(offset);
+    offset += 1;
+    if (marker === 0xd8 || marker === 0xd9) {
+      continue;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    if (offset + 1 >= buffer.length) {
+      return null;
+    }
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > buffer.length) {
+      return null;
+    }
+    const isStartOfFrame =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isStartOfFrame) {
+      if (segmentLength < 7 || offset + 6 >= buffer.length) {
+        return null;
+      }
+      return normalizeMetadata(buffer.readUInt16BE(offset + 5), buffer.readUInt16BE(offset + 3));
+    }
+    offset += segmentLength;
+  }
+  return null;
+}
+
+export function readImageMetadataFromHeader(input: ImageInput): ImageMetadata | null {
+  const buffer = toBuffer(input);
+  return (
+    readPngMetadata(buffer) ??
+    readGifMetadata(buffer) ??
+    readWebpMetadata(buffer) ??
+    readBmpMetadata(buffer) ??
+    readTiffMetadata(buffer) ??
+    readIsoBmffImageMetadata(buffer) ??
+    readJpegMetadata(buffer)
+  );
+}
+
+function hasPhotonDecodableHeader(buffer: Buffer): boolean {
+  return (
+    readPngMetadata(buffer) !== null ||
+    readGifMetadata(buffer) !== null ||
+    readWebpMetadata(buffer) !== null ||
+    readJpegMetadata(buffer) !== null
+  );
+}
+
+function assertPhotonDecodableHeader(buffer: Buffer): void {
+  if (!hasPhotonDecodableHeader(buffer)) {
+    throw new Error("Photon cannot decode this image format");
+  }
+}
+
+function validatePixelBudget(meta: ImageMetadata, maxInputPixels: number): ImageMetadata {
+  if (meta.width > Math.floor(maxInputPixels / meta.height)) {
+    const pixels = Number.isSafeInteger(meta.width * meta.height)
+      ? ` (${meta.width * meta.height} pixels)`
+      : "";
+    throw new Error(
+      `Image dimensions exceed the ${maxInputPixels.toLocaleString("en-US")} pixel input limit: ${meta.width}x${meta.height}${pixels}`,
+    );
+  }
+  return meta;
+}
+
+function assertHeaderPixelBudget(buffer: Buffer, maxInputPixels: number): ImageMetadata {
+  const meta = readImageMetadataFromHeader(buffer);
+  if (!meta) {
+    throw new Error("Unable to determine image dimensions; refusing to process");
+  }
+  return validatePixelBudget(meta, maxInputPixels);
+}
+
+function readJpegExifOrientation(buffer: Buffer): number | null {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    return null;
+  }
+  let offset = 2;
+  while (offset + 4 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
+    if (marker === 0xda || marker === 0xd9) {
+      return null;
+    }
+    if (offset + 4 > buffer.length) {
+      return null;
+    }
+    const segmentLength = buffer.readUInt16BE(offset + 2);
+    if (segmentLength < 2 || offset + 2 + segmentLength > buffer.length) {
+      return null;
+    }
+    if (
+      marker === 0xe1 &&
+      segmentLength >= 14 &&
+      buffer.toString("ascii", offset + 4, offset + 8) === "Exif" &&
+      buffer[offset + 8] === 0 &&
+      buffer[offset + 9] === 0
+    ) {
+      return readExifOrientationFromTiff(buffer, offset + 10, offset + 2 + segmentLength);
+    }
+    offset += 2 + segmentLength;
+  }
+  return null;
+}
+
+function readExifOrientationFromTiff(
+  buffer: Buffer,
+  tiffStart: number,
+  tiffEnd: number,
+): number | null {
+  if (tiffStart + 8 > tiffEnd) {
+    return null;
+  }
+  const byteOrder = buffer.toString("ascii", tiffStart, tiffStart + 2);
+  const littleEndian = byteOrder === "II";
+  if (!littleEndian && byteOrder !== "MM") {
+    return null;
+  }
+  const readU16 = (offset: number) =>
+    littleEndian ? buffer.readUInt16LE(offset) : buffer.readUInt16BE(offset);
+  const readU32 = (offset: number) =>
+    littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
+  if (readU16(tiffStart + 2) !== 42) {
+    return null;
+  }
+  const ifd0Start = tiffStart + readU32(tiffStart + 4);
+  if (ifd0Start + 2 > tiffEnd) {
+    return null;
+  }
+  const entries = readU16(ifd0Start);
+  for (let index = 0; index < entries; index += 1) {
+    const entryOffset = ifd0Start + 2 + index * 12;
+    if (entryOffset + 12 > tiffEnd) {
+      return null;
+    }
+    if (readU16(entryOffset) === 0x0112) {
+      const orientation = readU16(entryOffset + 8);
+      return orientation >= 1 && orientation <= 8 ? orientation : null;
+    }
+  }
+  return null;
+}
+
+function transformOrientation(
+  rawPixels: Uint8Array,
+  width: number,
+  height: number,
+  orientation: number,
+): { pixels: Uint8Array; width: number; height: number } {
+  if (orientation === 1) {
+    return { pixels: rawPixels, width, height };
+  }
+  const swapsAxes =
+    orientation === 5 || orientation === 6 || orientation === 7 || orientation === 8;
+  const outputWidth = swapsAxes ? height : width;
+  const outputHeight = swapsAxes ? width : height;
+  const out = new Uint8Array(outputWidth * outputHeight * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let targetX = x;
+      let targetY = y;
+      switch (orientation) {
+        case 2:
+          targetX = width - 1 - x;
+          break;
+        case 3:
+          targetX = width - 1 - x;
+          targetY = height - 1 - y;
+          break;
+        case 4:
+          targetY = height - 1 - y;
+          break;
+        case 5:
+          targetX = y;
+          targetY = x;
+          break;
+        case 6:
+          targetX = height - 1 - y;
+          targetY = x;
+          break;
+        case 7:
+          targetX = height - 1 - y;
+          targetY = width - 1 - x;
+          break;
+        case 8:
+          targetX = y;
+          targetY = width - 1 - x;
+          break;
+      }
+      const sourceOffset = (y * width + x) * 4;
+      const targetOffset = (targetY * outputWidth + targetX) * 4;
+      out[targetOffset] = rawPixels[sourceOffset] ?? 0;
+      out[targetOffset + 1] = rawPixels[sourceOffset + 1] ?? 0;
+      out[targetOffset + 2] = rawPixels[sourceOffset + 2] ?? 0;
+      out[targetOffset + 3] = rawPixels[sourceOffset + 3] ?? 255;
+    }
+  }
+  return { pixels: out, width: outputWidth, height: outputHeight };
+}
+
+async function loadPhoton(): Promise<PhotonModule> {
+  photonPromise ??= import("@silvia-odwyer/photon-node").then((mod) => {
+    if (
+      typeof mod.PhotonImage?.new_from_byteslice !== "function" ||
+      typeof mod.resize !== "function" ||
+      mod.SamplingFilter?.Lanczos3 === undefined
+    ) {
+      throw new Error("Photon did not expose the required image processor API");
+    }
+    return mod;
+  });
+  return await photonPromise;
+}
+
+function applyExifOrientation(
+  photon: PhotonModule,
+  image: PhotonImage,
+  buffer: Buffer,
+): PhotonImage {
+  const orientation = readJpegExifOrientation(buffer);
+  if (!orientation || orientation === 1) {
+    return image;
+  }
+  const transformed = transformOrientation(
+    image.get_raw_pixels(),
+    image.get_width(),
+    image.get_height(),
+    orientation,
+  );
+  image.free();
+  return new photon.PhotonImage(transformed.pixels, transformed.width, transformed.height);
+}
+
+function paethPredictor(left: number, up: number, upperLeft: number): number {
+  const prediction = left + up - upperLeft;
+  const distanceLeft = Math.abs(prediction - left);
+  const distanceUp = Math.abs(prediction - up);
+  const distanceUpperLeft = Math.abs(prediction - upperLeft);
+  if (distanceLeft <= distanceUp && distanceLeft <= distanceUpperLeft) {
+    return left;
+  }
+  return distanceUp <= distanceUpperLeft ? up : upperLeft;
+}
+
+function unfilterPngScanlines(
+  inflated: Buffer,
+  width: number,
+  height: number,
+  bytesPerPixel: number,
+): Buffer | null {
+  const stride = width * bytesPerPixel;
+  if (inflated.length !== (stride + 1) * height) {
+    return null;
+  }
+  const out = Buffer.alloc(stride * height);
+  for (let row = 0; row < height; row += 1) {
+    const filter = inflated[row * (stride + 1)];
+    const sourceOffset = row * (stride + 1) + 1;
+    const targetOffset = row * stride;
+    for (let column = 0; column < stride; column += 1) {
+      const raw = inflated[sourceOffset + column] ?? 0;
+      const left = column >= bytesPerPixel ? (out[targetOffset + column - bytesPerPixel] ?? 0) : 0;
+      const up = row > 0 ? (out[targetOffset + column - stride] ?? 0) : 0;
+      const upperLeft =
+        row > 0 && column >= bytesPerPixel
+          ? (out[targetOffset + column - stride - bytesPerPixel] ?? 0)
+          : 0;
+      let value: number;
+      switch (filter) {
+        case 0:
+          value = raw;
+          break;
+        case 1:
+          value = raw + left;
+          break;
+        case 2:
+          value = raw + up;
+          break;
+        case 3:
+          value = raw + Math.floor((left + up) / 2);
+          break;
+        case 4:
+          value = raw + paethPredictor(left, up, upperLeft);
+          break;
+        default:
+          return null;
+      }
+      out[targetOffset + column] = value & 0xff;
+    }
+  }
+  return out;
+}
+
+function decodeGrayscaleAlphaPng(buffer: Buffer): {
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+} | null {
+  if (buffer.length < 33 || !buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    return null;
+  }
+  let width = 0;
+  let height = 0;
+  const idatChunks: Buffer[] = [];
+  for (let offset = 8; offset + 12 <= buffer.length; ) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > buffer.length) {
+      return null;
+    }
+    const data = buffer.subarray(dataStart, dataEnd);
+    if (type === "IHDR") {
+      if (
+        length !== 13 ||
+        data[8] !== 8 ||
+        data[9] !== 4 ||
+        data[10] !== 0 ||
+        data[11] !== 0 ||
+        data[12] !== 0
+      ) {
+        return null;
+      }
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+    } else if (type === "IDAT") {
+      idatChunks.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset = dataEnd + 4;
+  }
+  const metadata = normalizeMetadata(width, height);
+  if (!metadata || idatChunks.length === 0) {
+    return null;
+  }
+  const expectedInflatedLength = (width * 2 + 1) * height;
+  const grayAlpha = unfilterPngScanlines(
+    inflateSync(Buffer.concat(idatChunks), { maxOutputLength: expectedInflatedLength }),
+    width,
+    height,
+    2,
+  );
+  if (!grayAlpha) {
+    return null;
+  }
+  const pixels = new Uint8Array(width * height * 4);
+  for (let source = 0, target = 0; source < grayAlpha.length; source += 2, target += 4) {
+    const gray = grayAlpha[source] ?? 0;
+    pixels[target] = gray;
+    pixels[target + 1] = gray;
+    pixels[target + 2] = gray;
+    pixels[target + 3] = grayAlpha[source + 1] ?? 255;
+  }
+  return { pixels, width, height };
+}
+
+async function loadOrientedPhotonImage(
+  buffer: Buffer,
+  maxInputPixels: number,
+): Promise<{ photon: PhotonModule; image: PhotonImage }> {
+  assertHeaderPixelBudget(buffer, maxInputPixels);
+  assertPhotonDecodableHeader(buffer);
+  const photon = await loadPhoton();
+  let decoded: PhotonImage;
+  try {
+    decoded = photon.PhotonImage.new_from_byteslice(buffer);
+  } catch (error) {
+    const grayscaleAlpha = decodeGrayscaleAlphaPng(buffer);
+    if (!grayscaleAlpha) {
+      throw error;
+    }
+    decoded = new photon.PhotonImage(
+      grayscaleAlpha.pixels,
+      grayscaleAlpha.width,
+      grayscaleAlpha.height,
+    );
+  }
+  validatePixelBudget(
+    { width: decoded.get_width(), height: decoded.get_height() },
+    maxInputPixels,
+  );
+  return { photon, image: applyExifOrientation(photon, decoded, buffer) };
+}
+
+function targetSize(
+  image: PhotonImage,
+  maxSide: number,
+  withoutEnlargement: boolean,
+): { width: number; height: number } {
+  return targetDimensions(
+    { width: image.get_width(), height: image.get_height() },
+    maxSide,
+    withoutEnlargement,
+  );
+}
+
+function targetDimensions(
+  metadata: ImageMetadata,
+  maxSide: number,
+  withoutEnlargement: boolean,
+): { width: number; height: number } {
+  const maxDimension = Math.max(metadata.width, metadata.height);
+  if (maxDimension <= 0) {
+    throw new Error("Invalid image dimensions");
+  }
+  const requestedScale = maxSide / maxDimension;
+  const scale = withoutEnlargement ? Math.min(1, requestedScale) : requestedScale;
+  return {
+    width: Math.max(1, Math.round(metadata.width * scale)),
+    height: Math.max(1, Math.round(metadata.height * scale)),
+  };
+}
+
+function assertOutputPixelBudget(
+  metadata: ImageMetadata,
+  resizeOptions: ResizeToJpegOptions | ResizeToPngOptions,
+  maxOutputPixels: number,
+): void {
+  const target = targetDimensions(
+    metadata,
+    resizeOptions.maxSide,
+    resizeOptions.withoutEnlargement !== false,
+  );
+  if (target.width > Math.floor(maxOutputPixels / target.height)) {
+    throw new Error(
+      `Image resize target exceeds the ${maxOutputPixels.toLocaleString("en-US")} pixel output limit: ${target.width}x${target.height}`,
+    );
+  }
+}
+
+function resizePhotonImage(
+  photon: PhotonModule,
+  image: PhotonImage,
+  options: ResizeToJpegOptions | ResizeToPngOptions,
+): PhotonImage {
+  const size = targetSize(image, options.maxSide, options.withoutEnlargement !== false);
+  if (size.width === image.get_width() && size.height === image.get_height()) {
+    return image;
+  }
+  const resized = photon.resize(image, size.width, size.height, photon.SamplingFilter.Lanczos3);
+  image.free();
+  return resized;
+}
+
+function crc32(buffer: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = (CRC_TABLE[(crc ^ byte) & 0xff] ?? 0) ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
+  return Buffer.concat([length, typeBuffer, data, crc]);
+}
+
+export function encodePngRgba(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  compressionLevel = 6,
+): Buffer {
+  normalizePositiveInteger(width, "width");
+  normalizePositiveInteger(height, "height");
+  if (pixels.byteLength !== width * height * 4) {
+    throw new Error("pixels length must equal width * height * 4");
+  }
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  const source = Buffer.from(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+  for (let row = 0; row < height; row += 1) {
+    const rawOffset = row * (stride + 1);
+    raw[rawOffset] = 0;
+    source.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  return Buffer.concat([
+    PNG_SIGNATURE,
+    pngChunk("IHDR", ihdr),
+    pngChunk(
+      "IDAT",
+      deflateSync(raw, { level: Math.max(0, Math.min(9, Math.round(compressionLevel))) }),
+    ),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function backendsForOperation(
+  operation: ImageOperation,
+  preference: ImageBackendPreference,
+): ImageBackend[] {
+  if (preference !== "auto") {
+    return [preference];
+  }
+  if (operation === "convertHeicToJpeg") {
+    return process.platform === "darwin"
+      ? ["sips", "imagemagick", "graphicsmagick", "ffmpeg"]
+      : ["imagemagick", "graphicsmagick", "ffmpeg"];
+  }
+  if (operation === "toPng") {
+    return ["photon", "imagemagick", "graphicsmagick"];
+  }
+  return process.platform === "darwin"
+    ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
+    : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+}
+
+function isBackendUnavailable(error: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = current.cause;
+  }
+  const detail = messages.join("\n").toLowerCase();
+  return (
+    detail.includes("cannot decode") ||
+    detail.includes("decode delegate") ||
+    detail.includes("decoder not found") ||
+    detail.includes("not available") ||
+    detail.includes("command not found") ||
+    detail.includes("enoent") ||
+    detail.includes("no images defined") ||
+    detail.includes("support for this compression format has not been built in") ||
+    detail.includes("unsupported image format")
+  );
+}
+
+async function runWithBackends<T>(
+  operation: ImageOperation,
+  options: Required<PrismOptions>,
+  fn: (backend: ImageBackend) => Promise<T>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const backends = backendsForOperation(operation, options.backend);
+  for (const backend of backends) {
+    try {
+      return await fn(backend);
+    } catch (error) {
+      errors.push(error);
+      if (!isBackendUnavailable(error)) {
+        throw error;
+      }
+    }
+  }
+  throw new PrismUnavailableError(
+    operation,
+    `Image processor unavailable for ${operation}; tried: ${backends.join(", ")}`,
+    errors,
+  );
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function pathCandidates(command: string): string[] {
+  if (path.isAbsolute(command)) {
+    return [command];
+  }
+  const paths = process.env.PATH?.split(path.delimiter).filter(Boolean) ?? [];
+  const extensions =
+    process.platform === "win32"
+      ? (process.env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT"])
+      : [""];
+  return paths.flatMap((dir) => extensions.map((ext) => path.join(dir, `${command}${ext}`)));
+}
+
+async function resolveExecutable(command: string): Promise<string | null> {
+  for (const candidate of pathCandidates(command)) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Try the next PATH candidate.
+    }
+  }
+  return null;
+}
+
+async function resolveExternalTool(backend: Exclude<ImageBackend, "photon">): Promise<ExternalImageTool | null> {
+  if (backend === "sips") {
+    return process.platform === "darwin"
+      ? { backend, flavor: "sips", command: "/usr/bin/sips" }
+      : null;
+  }
+  if (backend === "imagemagick") {
+    const magick = await resolveExecutable("magick");
+    if (magick) {
+      return { backend, flavor: "magick", command: magick };
+    }
+    if (process.platform !== "win32") {
+      const convert = await resolveExecutable("convert");
+      if (convert) {
+        return { backend, flavor: "convert", command: convert };
+      }
+    }
+    return null;
+  }
+  if (backend === "graphicsmagick") {
+    const gm = await resolveExecutable("gm");
+    return gm ? { backend, flavor: "gm", command: gm } : null;
+  }
+  const ffmpeg = await resolveExecutable("ffmpeg");
+  return ffmpeg ? { backend, flavor: "ffmpeg", command: ffmpeg } : null;
+}
+
+async function withImageTemp<T>(fn: (workspace: {
+  path(name: string): string;
+  write(name: string, buffer: Buffer): Promise<string>;
+  read(name: string): Promise<Buffer>;
+}) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-prism-"));
+  try {
+    return await fn({
+      path: (name) => path.join(dir, name),
+      write: async (name, buffer) => {
+        const target = path.join(dir, name);
+        await writeFile(target, buffer);
+        return target;
+      },
+      read: async (name) => await readFile(path.join(dir, name)),
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function runTool(
+  command: string,
+  args: string[],
+  options: Required<PrismOptions>,
+): Promise<void> {
+  await execFileAsync(command, args, {
+    timeout: options.timeoutMs,
+    maxBuffer: options.maxProcessBufferBytes,
+  });
+}
+
+function convertToolArgs(
+  tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
+  args: string[],
+): string[] {
+  return tool.flavor === "gm" ? ["convert", ...args] : args;
+}
+
+function firstImageScene(
+  _tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
+  input: string,
+): string {
+  return `${input}[0]`;
+}
+
+async function runConvertTool(
+  tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
+  args: string[],
+  options: Required<PrismOptions>,
+): Promise<void> {
+  await runTool(tool.command, convertToolArgs(tool, args), options);
+}
+
+function buildResizeGeometry(maxSide: number, withoutEnlargement?: boolean): string {
+  const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+  return `${side}x${side}${withoutEnlargement === false ? "" : ">"}`;
+}
+
+function buildFfmpegResizeFilter(maxSide: number, withoutEnlargement?: boolean): string {
+  const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+  if (withoutEnlargement === false) {
+    return `scale=w=${side}:h=${side}:force_original_aspect_ratio=decrease`;
+  }
+  return `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`;
+}
+
+async function externalToJpeg(
+  backend: Exclude<ImageBackend, "photon">,
+  buffer: Buffer,
+  resizeOptions: ResizeToJpegOptions,
+  options: Required<PrismOptions>,
+): Promise<Buffer> {
+  const tool = await resolveExternalTool(backend);
+  if (!tool) {
+    throw new Error(`Image backend ${backend} is not available`);
+  }
+  if (tool.flavor === "sips") {
+    return await withImageTemp(async (workspace) => {
+      const input = await workspace.write("in.img", buffer);
+      const output = workspace.path("out.jpg");
+      const resizeArgs =
+        resizeOptions.withoutEnlargement === false
+          ? (() => {
+              const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
+              const target = targetDimensions(metadata, resizeOptions.maxSide, false);
+              return ["-z", String(target.height), String(target.width)];
+            })()
+          : ["-Z", String(clampInteger(resizeOptions.maxSide, 1, Number.MAX_SAFE_INTEGER))];
+      await runTool(
+        tool.command,
+        [
+          ...resizeArgs,
+          "-s",
+          "format",
+          "jpeg",
+          "-s",
+          "formatOptions",
+          String(clampInteger(resizeOptions.quality ?? 85, 1, 100)),
+          input,
+          "--out",
+          output,
+        ],
+        options,
+      );
+      return await workspace.read("out.jpg");
+    });
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
+    const output = workspace.path("out.jpg");
+    if (tool.flavor === "ffmpeg") {
+      const qv = clampInteger(31 - (resizeOptions.quality ?? 85) * 0.29, 2, 31);
+      await runTool(
+        tool.command,
+        [
+          "-y",
+          "-i",
+          input,
+          "-vf",
+          buildFfmpegResizeFilter(resizeOptions.maxSide, resizeOptions.withoutEnlargement),
+          "-frames:v",
+          "1",
+          "-q:v",
+          String(qv),
+          output,
+        ],
+        options,
+      );
+      return await workspace.read("out.jpg");
+    }
+    await runConvertTool(
+      tool,
+      [
+        firstImageScene(tool, input),
+        "-auto-orient",
+        "-resize",
+        buildResizeGeometry(resizeOptions.maxSide, resizeOptions.withoutEnlargement),
+        "-quality",
+        String(clampInteger(resizeOptions.quality ?? 85, 1, 100)),
+        output,
+      ],
+      options,
+    );
+    return await workspace.read("out.jpg");
+  });
+}
+
+async function externalToPng(
+  backend: Exclude<ImageBackend, "photon" | "sips" | "ffmpeg">,
+  buffer: Buffer,
+  resizeOptions: ResizeToPngOptions,
+  options: Required<PrismOptions>,
+): Promise<Buffer> {
+  const tool = await resolveExternalTool(backend);
+  if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips") {
+    throw new Error(`Image backend ${backend} is not available for PNG resizing`);
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
+    const output = workspace.path("out.png");
+    const args = [
+      firstImageScene(tool, input),
+      "-auto-orient",
+      "-resize",
+      buildResizeGeometry(resizeOptions.maxSide, resizeOptions.withoutEnlargement),
+    ];
+    if (resizeOptions.compressionLevel !== undefined && tool.flavor !== "gm") {
+      args.push(
+        "-define",
+        `png:compression-level=${clampInteger(resizeOptions.compressionLevel, 0, 9)}`,
+      );
+    }
+    args.push(output);
+    await runConvertTool(tool, args, options);
+    return await workspace.read("out.png");
+  });
+}
+
+async function externalConvertToJpeg(
+  backend: Exclude<ImageBackend, "photon">,
+  buffer: Buffer,
+  options: Required<PrismOptions>,
+): Promise<Buffer> {
+  const tool = await resolveExternalTool(backend);
+  if (!tool) {
+    throw new Error(`Image backend ${backend} is not available`);
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
+    const output = workspace.path("out.jpg");
+    if (tool.flavor === "sips") {
+      await runTool(tool.command, ["-s", "format", "jpeg", input, "--out", output], options);
+    } else if (tool.flavor === "ffmpeg") {
+      await runTool(
+        tool.command,
+        ["-y", "-i", input, "-frames:v", "1", "-q:v", "3", output],
+        options,
+      );
+    } else {
+      await runConvertTool(
+        tool,
+        [firstImageScene(tool, input), "-auto-orient", "-quality", "90", output],
+        options,
+      );
+    }
+    return await workspace.read("out.jpg");
+  });
+}
+
+async function externalHasAlpha(
+  backend: Exclude<ImageBackend, "photon">,
+  buffer: Buffer,
+  options: Required<PrismOptions>,
+): Promise<boolean> {
+  const tool = await resolveExternalTool(backend);
+  if (!tool || tool.flavor === "sips" || tool.flavor === "ffmpeg") {
+    throw new Error(`Image backend ${backend} is not available for alpha inspection`);
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
+    const identifyCommand =
+      tool.flavor === "convert" ? await resolveExecutable("identify") : tool.command;
+    if (!identifyCommand) {
+      throw new Error("ImageMagick identify is not available for alpha inspection");
+    }
+    const args =
+      tool.flavor === "gm"
+        ? ["identify", "-format", "%A", firstImageScene(tool, input)]
+        : tool.flavor === "magick"
+          ? ["identify", "-format", "%[channels]", firstImageScene(tool, input)]
+          : ["-format", "%[channels]", firstImageScene(tool, input)];
+    const { stdout } = await execFileAsync(identifyCommand, args, {
+      timeout: options.timeoutMs,
+      maxBuffer: options.maxProcessBufferBytes,
+    });
+    return tool.flavor === "gm"
+      ? parseGraphicsMagickAlpha(stdout)
+      : parseImageMagickChannelsAlpha(stdout);
+  });
+}
+
+function parseGraphicsMagickAlpha(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "true" ||
+    normalized === "on" ||
+    normalized === "yes" ||
+    normalized === "1" ||
+    normalized === "matte"
+  );
+}
+
+function parseImageMagickChannelsAlpha(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === "gray" || normalized === "grey" || normalized === "rgb") {
+    return false;
+  }
+  const tokens = normalized.split(/[^a-z0-9]+/u).filter(Boolean);
+  return tokens.some((token) =>
+    token === "alpha" ||
+    token === "a" ||
+    token === "rgba" ||
+    token === "srgba" ||
+    token === "cmyka" ||
+    token === "graya" ||
+    token === "greya" ||
+    token.endsWith("alpha")
+  );
+}
+
+function createProcessor(options: Required<PrismOptions>): Prism {
+  const prism: Prism = {
+    async metadata(input) {
+      const buffer = toBuffer(input);
+      const header = readImageMetadataFromHeader(buffer);
+      if (header) {
+        try {
+          return validatePixelBudget(header, options.maxInputPixels);
+        } catch {
+          return null;
+        }
+      }
+      if (options.backend !== "auto" && options.backend !== "photon") {
+        return null;
+      }
+      try {
+        const { image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
+        try {
+          return validatePixelBudget(
+            { width: image.get_width(), height: image.get_height() },
+            options.maxInputPixels,
+          );
+        } finally {
+          image.free();
+        }
+      } catch {
+        return null;
+      }
+    },
+
+    async normalize(input) {
+      const buffer = toBuffer(input);
+      assertHeaderPixelBudget(buffer, options.maxInputPixels);
+      const orientation = readJpegExifOrientation(buffer);
+      if (!orientation || orientation === 1) {
+        return buffer;
+      }
+      return await runWithBackends("normalize", options, async (backend) => {
+        if (backend === "photon") {
+          const { image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
+          try {
+            return Buffer.from(image.get_bytes_jpeg(90));
+          } finally {
+            image.free();
+          }
+        }
+        return await externalConvertToJpeg(backend, buffer, options);
+      });
+    },
+
+    async toJpeg(input, resizeOptions) {
+      const buffer = toBuffer(input);
+      const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
+      assertOutputPixelBudget(metadata, resizeOptions, options.maxOutputPixels);
+      return await runWithBackends("toJpeg", options, async (backend) => {
+        if (backend === "photon") {
+          const { photon, image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
+          const resized = resizePhotonImage(photon, image, resizeOptions);
+          try {
+            return Buffer.from(resized.get_bytes_jpeg(resizeOptions.quality ?? 85));
+          } finally {
+            resized.free();
+          }
+        }
+        return await externalToJpeg(backend, buffer, resizeOptions, options);
+      });
+    },
+
+    async toPng(input, resizeOptions) {
+      const buffer = toBuffer(input);
+      const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
+      assertOutputPixelBudget(metadata, resizeOptions, options.maxOutputPixels);
+      return await runWithBackends("toPng", options, async (backend) => {
+        if (backend === "photon") {
+          const { photon, image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
+          const resized = resizePhotonImage(photon, image, resizeOptions);
+          try {
+            return encodePngRgba(
+              resized.get_raw_pixels(),
+              resized.get_width(),
+              resized.get_height(),
+              resizeOptions.compressionLevel,
+            );
+          } finally {
+            resized.free();
+          }
+        }
+        if (backend === "imagemagick" || backend === "graphicsmagick") {
+          return await externalToPng(backend, buffer, resizeOptions, options);
+        }
+        throw new Error(`Image backend ${backend} is not available for PNG resizing`);
+      });
+    },
+
+    async optimizePng(input, optimizeOptions) {
+      const buffer = toBuffer(input);
+      const sides = optimizeOptions.sides?.length
+        ? [...optimizeOptions.sides]
+        : [...DEFAULT_PNG_SIDES];
+      const compressionLevels = optimizeOptions.compressionLevels?.length
+        ? [...optimizeOptions.compressionLevels]
+        : [...DEFAULT_PNG_COMPRESSION_LEVELS];
+      let smallest: OptimizedPng | null = null;
+      let firstResizeError: unknown;
+      for (const side of sides) {
+        for (const compressionLevel of compressionLevels) {
+          try {
+            const out = await prism.toPng(buffer, {
+              maxSide: side,
+              compressionLevel,
+              withoutEnlargement: true,
+            });
+            const candidate = {
+              buffer: out,
+              optimizedSize: out.length,
+              resizeSide: side,
+              compressionLevel,
+            };
+            if (!smallest || candidate.optimizedSize < smallest.optimizedSize) {
+              smallest = candidate;
+            }
+            if (candidate.optimizedSize <= optimizeOptions.maxBytes) {
+              return candidate;
+            }
+          } catch (error) {
+            firstResizeError ??= error;
+          }
+        }
+      }
+      if (smallest) {
+        return smallest;
+      }
+      if (firstResizeError) {
+        throw firstResizeError;
+      }
+      throw new Error("Failed to optimize PNG image");
+    },
+
+    async convertHeicToJpeg(input) {
+      const buffer = toBuffer(input);
+      assertHeaderPixelBudget(buffer, options.maxInputPixels);
+      return await runWithBackends("convertHeicToJpeg", options, async (backend) => {
+        if (backend === "photon") {
+          throw new Error("Photon cannot decode HEIC/AVIF images");
+        }
+        return await externalConvertToJpeg(backend, buffer, options);
+      });
+    },
+
+    async hasAlpha(input) {
+      const buffer = toBuffer(input);
+      assertHeaderPixelBudget(buffer, options.maxInputPixels);
+      const pngAlpha = readPngAlphaChannel(buffer);
+      if (pngAlpha !== null) {
+        return pngAlpha;
+      }
+      return await runWithBackends("hasAlpha", options, async (backend) => {
+        if (backend === "photon") {
+          const { image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
+          try {
+            const pixels = image.get_raw_pixels();
+            for (let offset = 3; offset < pixels.length; offset += 4) {
+              if ((pixels[offset] ?? 255) < 255) {
+                return true;
+              }
+            }
+            return false;
+          } finally {
+            image.free();
+          }
+        }
+        return await externalHasAlpha(backend, buffer, options);
+      });
+    },
+  };
+  return prism;
+}
+
+export function createPrism(options: PrismOptions = {}): Prism {
+  return createProcessor(normalizeOptions(options));
+}
+
+const defaultPrism = createPrism();
+
+export async function metadata(input: ImageInput): Promise<ImageMetadata | null> {
+  return await defaultPrism.metadata(input);
+}
+
+export async function normalize(input: ImageInput): Promise<Buffer> {
+  return await defaultPrism.normalize(input);
+}
+
+export async function toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer> {
+  return await defaultPrism.toJpeg(input, options);
+}
+
+export async function toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer> {
+  return await defaultPrism.toPng(input, options);
+}
+
+export async function optimizePng(
+  input: ImageInput,
+  options: OptimizePngOptions,
+): Promise<OptimizedPng> {
+  return await defaultPrism.optimizePng(input, options);
+}
+
+export async function convertHeicToJpeg(input: ImageInput): Promise<Buffer> {
+  return await defaultPrism.convertHeicToJpeg(input);
+}
+
+export async function hasAlpha(input: ImageInput): Promise<boolean> {
+  return await defaultPrism.hasAlpha(input);
+}

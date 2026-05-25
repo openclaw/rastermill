@@ -1,0 +1,61 @@
+{
+  "name": "@openclaw/prism",
+  "version": "0.1.0",
+  "description": "Fast, portable image processing for Node agents.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/prism.git"
+  },
+  "homepage": "https://github.com/openclaw/prism#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/prism/issues"
+  },
+  "keywords": [
+    "image",
+    "resize",
+    "jpeg",
+    "png",
+    "webp",
+    "heic",
+    "avif",
+    "photon"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.3",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "prepare": "pnpm build",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm check && pnpm test && pnpm build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@silvia-odwyer/photon-node": "0.3.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

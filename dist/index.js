@@ -1499,11 +1499,18 @@ function createProcessor(options) {
         async encodeWithinBytes(input, encodeOptions) {
             const buffer = toBuffer(input);
             const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
+            const defaultMaxSides = encodeOptions.format === "png"
+                ? [...DEFAULT_PNG_SIDES]
+                : [2048, 1536, 1280, 1024, 800];
+            const resizeMaxSide = encodeOptions.resize?.maxSide;
             const maxSides = encodeOptions.search?.maxSide?.length
                 ? [...encodeOptions.search.maxSide]
-                : encodeOptions.format === "png"
-                    ? [...DEFAULT_PNG_SIDES]
-                    : [2048, 1536, 1280, 1024, 800];
+                : resizeMaxSide === undefined
+                    ? defaultMaxSides
+                    : [
+                        normalizePositiveInteger(resizeMaxSide, "resize.maxSide"),
+                        ...defaultMaxSides.filter((side) => side < resizeMaxSide),
+                    ].filter((side, index, sides) => sides.indexOf(side) === index);
             const qualities = encodeOptions.search?.quality?.length
                 ? [...encodeOptions.search.quality]
                 : [85, 75, 65, 55, 45, 35];
@@ -1571,7 +1578,7 @@ function createProcessor(options) {
                 return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
             }
             catch (error) {
-                return remapUnavailableOperation(error, "encode");
+                return remapUnavailableOperation(error, "normalize");
             }
         },
         async toJpeg(input, resizeOptions) {

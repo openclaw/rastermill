@@ -21,6 +21,32 @@ function rgbaImage(width: number, height: number, alpha = 255): Buffer {
   return encodePngRgba(pixels, width, height);
 }
 
+function jpegHeaderWithExifOrientation(width: number, height: number, orientation: number): Buffer {
+  const tiff = Buffer.alloc(26);
+  tiff.write("II", 0, "ascii");
+  tiff.writeUInt16LE(42, 2);
+  tiff.writeUInt32LE(8, 4);
+  tiff.writeUInt16LE(1, 8);
+  tiff.writeUInt16LE(0x0112, 10);
+  tiff.writeUInt16LE(3, 12);
+  tiff.writeUInt32LE(1, 14);
+  tiff.writeUInt16LE(orientation, 18);
+  const exifPayload = Buffer.concat([Buffer.from("Exif\0\0", "binary"), tiff]);
+  const app1 = Buffer.alloc(4);
+  app1.writeUInt16BE(0xffe1, 0);
+  app1.writeUInt16BE(exifPayload.length + 2, 2);
+
+  const sof0 = Buffer.alloc(19);
+  sof0.writeUInt16BE(0xffc0, 0);
+  sof0.writeUInt16BE(17, 2);
+  sof0[4] = 8;
+  sof0.writeUInt16BE(height, 5);
+  sof0.writeUInt16BE(width, 7);
+  sof0[9] = 3;
+
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, exifPayload, sof0, Buffer.from([0xff, 0xd9])]);
+}
+
 function tiffImageFileDirectories(
   pages: readonly { width: number; height: number }[],
   options?: { subIfd?: boolean },
@@ -151,6 +177,21 @@ describe("Rastermill", () => {
     expect(result.chosen.quality).toBeGreaterThan(0);
   });
 
+  it("keeps the caller resize cap as the default byte-budget search side", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(64, 64, 255);
+
+    const result = await rastermill.encodeWithinBytes(source, {
+      format: "jpeg",
+      maxBytes: 10_000_000,
+      resize: { maxSide: 16 },
+    });
+
+    expect(result.width).toBeLessThanOrEqual(16);
+    expect(result.height).toBeLessThanOrEqual(16);
+    expect(result.chosen.maxSide).toBe(16);
+  });
+
   it("rejects images over the configured pixel budget before decoding", async () => {
     const rastermill = createRastermill({ maxInputPixels: 100 });
     const source = rgbaImage(20, 20);
@@ -173,6 +214,17 @@ describe("Rastermill", () => {
     const rastermill = createRastermill({ maxInputPixels: 100 });
 
     await expect(rastermill.normalize(rgbaImage(20, 20))).rejects.toThrow("pixel input limit");
+  });
+
+  it("reports normalize backend unavailability as a normalize failure", async () => {
+    const rastermill = createRastermill({
+      backend: "imagemagick",
+      commandResolver: () => null,
+    });
+
+    await expect(rastermill.normalize(jpegHeaderWithExifOrientation(8, 4, 6))).rejects.toMatchObject({
+      operation: "normalize",
+    });
   });
 
   it("passes exact fill dimensions through to native backends", async () => {

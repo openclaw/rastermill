@@ -100,7 +100,7 @@ export type Rastermill = {
     convertHeicToJpeg(input: ImageInput): Promise<Buffer>;
     hasAlpha(input: ImageInput): Promise<boolean>;
 };
-type ImageOperation = "encode" | "toJpeg" | "toPng" | "optimizePng" | "convertHeicToJpeg" | "hasAlpha";
+type ImageOperation = "encode" | "normalize" | "toJpeg" | "toPng" | "optimizePng" | "convertHeicToJpeg" | "hasAlpha";
 export declare class RastermillUnavailableError extends Error {
     readonly code = "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
     readonly operation: ImageOperation;

@@ -994,8 +994,9 @@ async function resolveExecutable(command, options) {
 }
 async function resolveExternalTool(backend, options) {
     if (backend === "sips") {
-        return process.platform === "darwin"
-            ? { backend, flavor: "sips", command: "/usr/bin/sips" }
+        const sips = await resolveExecutable("sips", options);
+        return sips && process.platform === "darwin"
+            ? { backend, flavor: "sips", command: sips }
             : null;
     }
     if (backend === "windows-native") {

@@ -284,6 +284,25 @@ describe("Rastermill", () => {
     expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
   });
 
+  it.runIf(process.platform === "darwin")(
+    "resolves sips through the injected resolver",
+    async () => {
+      const requested: string[] = [];
+      const rastermill = createRastermill({
+        backend: "sips",
+        commandResolver: (command) => {
+          requested.push(command);
+          return null;
+        },
+      });
+
+      await expect(
+        rastermill.encode(rgbaImage(4, 4), { format: "jpeg", resize: { maxSide: 4 } }),
+      ).rejects.toBeInstanceOf(RastermillUnavailableError);
+      expect(requested).toEqual(["sips"]);
+    },
+  );
+
   it("reads the backend preference from the configured env var without app-specific fallbacks", async () => {
     const previousRastermillBackend = process.env.RASTERMILL_IMAGE_BACKEND;
     const previousOpenClawBackend = process.env.OPENCLAW_IMAGE_BACKEND;

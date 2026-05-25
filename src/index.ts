@@ -1332,8 +1332,9 @@ async function resolveExternalTool(
   options: ResolvedOptions,
 ): Promise<ExternalImageTool | null> {
   if (backend === "sips") {
-    return process.platform === "darwin"
-      ? { backend, flavor: "sips", command: "/usr/bin/sips" }
+    const sips = await resolveExecutable("sips", options);
+    return sips && process.platform === "darwin"
+      ? { backend, flavor: "sips", command: sips }
       : null;
   }
   if (backend === "windows-native") {

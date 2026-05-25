@@ -1,25 +1,36 @@
-# `toJpeg`
+# `encode` to JPEG
 
 Resize an image so its longest side fits a limit, then encode it as JPEG.
 
 ```ts
+encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>
 toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer>
 ```
 
 ```ts
-const jpeg = await rastermill.toJpeg(buffer, {
-  maxSide: 1600,
+const jpeg = await rastermill.encode(buffer, {
+  format: "jpeg",
+  resize: { maxSide: 1600, enlarge: false },
   quality: 85,
 });
+
+console.log(jpeg.width, jpeg.height, jpeg.bytes);
 ```
 
 ## Options
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `maxSide` | `number` | — (required) | Target for the longest edge, in pixels. Aspect ratio is preserved. |
+| `format` | `"jpeg"` | — (required) | Output format. |
+| `resize.maxSide` | `number` | source size | Target for the longest edge, in pixels. Aspect ratio is preserved. |
+| `resize.width` / `resize.height` | `number` | source size | Optional bounding box. |
+| `resize.fit` | `"inside"` or `"fill"` | `"inside"` | Resize mode. `"cover"` is reserved and currently rejected. |
+| `resize.enlarge` | `boolean` | `false` | Allow upscaling. |
 | `quality` | `number` | `85` | JPEG quality, `1`–`100`. |
-| `withoutEnlargement` | `boolean` | `true` | When `true`, never upscale: a smaller image is returned at its original size. Set `false` to allow enlargement. |
+
+`toJpeg` is kept as a compatibility wrapper. It maps `{ maxSide,
+withoutEnlargement }` onto `encode({ format: "jpeg", resize })` and returns the
+encoded `Buffer`.
 
 ## Behavior
 

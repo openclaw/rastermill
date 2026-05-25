@@ -4,6 +4,7 @@ Report whether an image carries a transparent (alpha) channel.
 
 ```ts
 hasAlpha(input: ImageInput): Promise<boolean>
+probe(input: ImageInput): Promise<ImageProbe | null>
 ```
 
 ```ts
@@ -11,6 +12,10 @@ if (await rastermill.hasAlpha(buffer)) {
   // keep PNG; converting to JPEG would flatten transparency
 }
 ```
+
+For PNG and some WebP headers, `probe(input)` can return `hasAlpha` without
+decoding. Use `hasAlpha` when you need a definitive boolean and are willing to
+let Rastermill decode or ask a native backend.
 
 ## Behavior
 

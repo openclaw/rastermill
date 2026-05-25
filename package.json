@@ -1,6 +1,6 @@
 {
   "name": "rastermill",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fast, portable image processing for Node agents.",
   "type": "module",
   "license": "MIT",
@@ -17,9 +17,7 @@
     "resize",
     "jpeg",
     "png",
-    "webp",
     "heic",
-    "avif",
     "photon"
   ],
   "exports": {

@@ -1,9 +1,13 @@
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRastermill,
   encodePngRgba,
   RastermillUnavailableError,
   readImageMetadataFromHeader,
+  readImageProbeFromHeader,
 } from "../src/index.js";
 
 function rgbaImage(width: number, height: number, alpha = 255): Buffer {
@@ -60,9 +64,30 @@ describe("Rastermill", () => {
     const image = rgbaImage(16, 8);
 
     expect(readImageMetadataFromHeader(image)).toEqual({ width: 16, height: 8 });
+    expect(readImageProbeFromHeader(image)).toEqual({
+      format: "png",
+      width: 16,
+      height: 8,
+      hasAlpha: true,
+      orientation: null,
+    });
   });
 
-  it("resizes PNG input to JPEG through the elegant processor API", async () => {
+  it("encodes PNG input to JPEG through the unified processor API", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(16, 8);
+
+    const jpeg = await rastermill.encode(source, {
+      format: "jpeg",
+      resize: { maxSide: 4 },
+      quality: 82,
+    });
+
+    expect(jpeg).toMatchObject({ format: "jpeg", width: 4, height: 2, bytes: jpeg.data.length });
+    await expect(rastermill.metadata(jpeg.data)).resolves.toEqual({ width: 4, height: 2 });
+  });
+
+  it("keeps compatibility wrappers delegating to encode", async () => {
     const rastermill = createRastermill();
     const source = rgbaImage(16, 8);
 
@@ -108,6 +133,24 @@ describe("Rastermill", () => {
     expect(result.resizeSide).toBeGreaterThan(0);
   });
 
+  it("generalizes byte-budget encoding across formats", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(64, 64, 255);
+
+    const result = await rastermill.encodeWithinBytes(source, {
+      format: "jpeg",
+      maxBytes: 700,
+      search: {
+        maxSide: [32, 16],
+        quality: [80, 50],
+      },
+    });
+
+    expect(result.bytes).toBeLessThanOrEqual(700);
+    expect(result.chosen.maxSide).toBeGreaterThan(0);
+    expect(result.chosen.quality).toBeGreaterThan(0);
+  });
+
   it("rejects images over the configured pixel budget before decoding", async () => {
     const rastermill = createRastermill({ maxInputPixels: 100 });
     const source = rgbaImage(20, 20);
@@ -124,6 +167,57 @@ describe("Rastermill", () => {
     await expect(
       rastermill.toJpeg(source, { maxSide: 100_000, withoutEnlargement: false }),
     ).rejects.toThrow("pixel output limit");
+  });
+
+  it("validates normalize inputs before returning unchanged bytes", async () => {
+    const rastermill = createRastermill({ maxInputPixels: 100 });
+
+    await expect(rastermill.normalize(rgbaImage(20, 20))).rejects.toThrow("pixel input limit");
+  });
+
+  it("passes exact fill dimensions through to native backends", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-native-test-"));
+    try {
+      const log = path.join(tmp, "args.json");
+      const script = path.join(tmp, "magick.js");
+      const outputPng = rgbaImage(4, 4).toString("base64");
+      await writeFile(
+        script,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));`,
+          `fs.writeFileSync(process.argv.at(-1), Buffer.from(${JSON.stringify(outputPng)}, 'base64'));`,
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(script, 0o755);
+      const rastermill = createRastermill({
+        backend: "imagemagick",
+        commandResolver: (command) => (command === "magick" ? script : null),
+      });
+
+      const result = await rastermill.encode(rgbaImage(8, 4), {
+        format: "jpeg",
+        resize: { fit: "fill", width: 4, height: 4 },
+      });
+
+      expect(result).toMatchObject({ width: 4, height: 4 });
+      expect(JSON.parse(await readFile(log, "utf8"))).toContain("4x4!");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cover resize until crop semantics are implemented", async () => {
+    const rastermill = createRastermill();
+
+    await expect(
+      rastermill.encode(rgbaImage(8, 4), {
+        format: "jpeg",
+        resize: { fit: "cover", width: 4 },
+      }),
+    ).rejects.toThrow("resize.fit cover is not supported yet");
   });
 
   it("uses the largest linked TIFF page for metadata and pixel limits", async () => {
@@ -166,6 +260,38 @@ describe("Rastermill", () => {
       RastermillUnavailableError,
     );
     expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
+  });
+
+  it("uses the Rastermill backend env var without app-specific fallbacks", async () => {
+    const previousRastermillBackend = process.env.RASTERMILL_IMAGE_BACKEND;
+    const previousOpenClawBackend = process.env.OPENCLAW_IMAGE_BACKEND;
+    try {
+      process.env.RASTERMILL_IMAGE_BACKEND = "imagemagick";
+      process.env.OPENCLAW_IMAGE_BACKEND = "ffmpeg";
+      const requested: string[] = [];
+      const rastermill = createRastermill({
+        commandResolver: (command) => {
+          requested.push(command);
+          return null;
+        },
+      });
+
+      await expect(rastermill.toJpeg(rgbaImage(4, 4), { maxSide: 4 })).rejects.toBeInstanceOf(
+        RastermillUnavailableError,
+      );
+      expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
+    } finally {
+      if (previousRastermillBackend === undefined) {
+        delete process.env.RASTERMILL_IMAGE_BACKEND;
+      } else {
+        process.env.RASTERMILL_IMAGE_BACKEND = previousRastermillBackend;
+      }
+      if (previousOpenClawBackend === undefined) {
+        delete process.env.OPENCLAW_IMAGE_BACKEND;
+      } else {
+        process.env.OPENCLAW_IMAGE_BACKEND = previousOpenClawBackend;
+      }
+    }
   });
 
   it("does not fall back to native tools after a real Photon processing error", async () => {

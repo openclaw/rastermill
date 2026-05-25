@@ -10,13 +10,13 @@ executables, a missing Photon package, unsupported formats, or absent codecs.
 
 ```ts
 class RastermillUnavailableError extends Error {
-  readonly code: "PRISM_IMAGE_PROCESSOR_UNAVAILABLE";
-  readonly operation: ImageOperation; // e.g. "toJpeg", "convertHeicToJpeg"
+  readonly code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
+  readonly operation: ImageOperation; // e.g. "encode", "toJpeg"
   readonly causes: unknown[];         // the per-backend errors collected
 }
 ```
 
-- `code` is the stable string `"PRISM_IMAGE_PROCESSOR_UNAVAILABLE"`.
+- `code` is the stable string `"RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE"`.
 - `operation` names the failing operation.
 - `causes` holds the error thrown by each attempted backend, in order. The
   standard `Error.cause` is set to the first `Error` among them.
@@ -27,10 +27,10 @@ class RastermillUnavailableError extends Error {
 A type guard for branching on availability versus other failures:
 
 ```ts
-import { isRastermillUnavailableError } from "@openclaw/rastermill";
+import { isRastermillUnavailableError } from "rastermill";
 
 try {
-  return await rastermill.convertHeicToJpeg(buffer);
+  return await rastermill.encode(buffer, { format: "jpeg" });
 } catch (error) {
   if (isRastermillUnavailableError(error)) {
     // No HEIC-capable backend installed — degrade gracefully.

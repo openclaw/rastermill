@@ -11,13 +11,16 @@ codec support.
 import { createRastermill } from "rastermill";
 
 const rastermill = createRastermill({
-  maxInputPixels: 25_000_000,
-  maxOutputPixels: 25_000_000,
+  limits: {
+    inputPixels: 25_000_000,
+    outputPixels: 25_000_000,
+  },
 });
 
-const info = await rastermill.metadata(imageBuffer);
-const jpeg = await rastermill.toJpeg(imageBuffer, {
-  maxSide: 1600,
+const info = await rastermill.probe(imageBuffer);
+const jpeg = await rastermill.encode(imageBuffer, {
+  format: "jpeg",
+  resize: { maxSide: 1600 },
   quality: 85,
 });
 ```
@@ -30,8 +33,11 @@ const rastermill = createRastermill(options);
 
 Core methods:
 
+- `probe(input)`
 - `metadata(input)`
 - `normalize(input)`
+- `encode(input, options)`
+- `encodeWithinBytes(input, options)`
 - `toJpeg(input, options)`
 - `toPng(input, options)`
 - `optimizePng(input, options)`
@@ -40,7 +46,10 @@ Core methods:
 
 Convenience functions with default options are also exported:
 
+- `probe(input)`
 - `metadata(input)`
+- `encode(input, options)`
+- `encodeWithinBytes(input, options)`
 - `toJpeg(input, options)`
 - `toPng(input, options)`
 - `optimizePng(input, options)`

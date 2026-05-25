@@ -1,18 +1,21 @@
-# `metadata`
+# `probe` and `metadata`
 
-Read an image's pixel dimensions, cheaply and without fully decoding it.
+Read cheap image information without fully decoding it.
 
 ```ts
+probe(input: ImageInput): Promise<ImageProbe | null>
 metadata(input: ImageInput): Promise<ImageMetadata | null>
 ```
 
+`ImageProbe` is `{ format, width, height, hasAlpha, orientation }`. `hasAlpha`
+and `orientation` are `null` when the answer is not cheaply known from headers.
 `ImageMetadata` is `{ width: number; height: number }`. Returns `null` when the
 dimensions can't be determined or the image exceeds `maxInputPixels`.
 
 ```ts
-const info = await rastermill.metadata(buffer);
+const info = await rastermill.probe(buffer);
 if (info) {
-  console.log(`${info.width}×${info.height}`);
+  console.log(`${info.format} ${info.width}×${info.height}`);
 }
 ```
 
@@ -38,15 +41,17 @@ also return `null`.
 
 ## Header-only parsing
 
-`readImageMetadataFromHeader` is exported for when you want pure header parsing
-with no pixel-budget check and no decode fallback. It's synchronous.
+`readImageProbeFromHeader` and `readImageMetadataFromHeader` are exported for
+when you want pure header parsing with no pixel-budget check and no decode
+fallback. They are synchronous.
 
 ```ts
-import { readImageMetadataFromHeader } from "@openclaw/rastermill";
+import { readImageMetadataFromHeader, readImageProbeFromHeader } from "rastermill";
 
+const probe = readImageProbeFromHeader(buffer); // ImageProbe | null
 const dims = readImageMetadataFromHeader(buffer); // ImageMetadata | null
 ```
 
-This is the primitive `metadata` builds on. Use it when you only trust headers,
-want zero async work, or are sizing images before deciding whether to hand them
-to Rastermill at all.
+These are the primitives `probe` and `metadata` build on. Use them when you only
+trust headers, want zero async work, or are sizing images before deciding
+whether to hand them to Rastermill at all.

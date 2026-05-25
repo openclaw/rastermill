@@ -3,11 +3,12 @@
 Convert a HEIC/HEIF/AVIF image to JPEG using a native codec.
 
 ```ts
+encode(input: ImageInput, { format: "jpeg" }): Promise<EncodedImage>
 convertHeicToJpeg(input: ImageInput): Promise<Buffer>
 ```
 
 ```ts
-const jpeg = await rastermill.convertHeicToJpeg(heicBuffer);
+const jpeg = await rastermill.encode(heicBuffer, { format: "jpeg" });
 ```
 
 ## Behavior
@@ -21,10 +22,9 @@ Backend order under `backend: "auto"`:
 - macOS: `sips → imagemagick → graphicsmagick → ffmpeg`
 - everywhere else: `imagemagick → graphicsmagick → ffmpeg`
 
-The output is JPEG. `sips` and the ImageMagick/GraphicsMagick path encode at
-quality 90; ffmpeg encodes at a comparable fixed quality. EXIF orientation is
-applied where the backend supports it (`sips` auto-orients via Rastermill;
-ImageMagick/GraphicsMagick use `-auto-orient`).
+The output is JPEG. Quality defaults to `85` for the unified encode path. EXIF
+orientation is applied where the backend supports it (`sips` auto-orients via
+Rastermill; ImageMagick/GraphicsMagick use `-auto-orient`).
 
 > The `windows-native` backend does **not** convert HEIC — `System.Drawing`
 > lacks a HEIC decoder. On Windows, install ImageMagick, GraphicsMagick, or
@@ -36,3 +36,6 @@ If no native backend with HEIC support is available, Rastermill throws a
 [`RastermillUnavailableError`](./error-handling.md) for the `convertHeicToJpeg`
 operation. Many systems need an explicit HEIC codec/delegate installed for
 ImageMagick or ffmpeg.
+
+`convertHeicToJpeg` is kept as a compatibility wrapper over
+`encode(input, { format: "jpeg" })`.

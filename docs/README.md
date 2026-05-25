@@ -7,12 +7,16 @@ Windows `System.Drawing` stack) when a format or operation needs an external
 codec.
 
 ```ts
-import { createRastermill } from "@openclaw/rastermill";
+import { createRastermill } from "rastermill";
 
-const rastermill = createRastermill({ maxInputPixels: 25_000_000 });
+const rastermill = createRastermill({ limits: { inputPixels: 25_000_000 } });
 
-const info = await rastermill.metadata(imageBuffer);
-const jpeg = await rastermill.toJpeg(imageBuffer, { maxSide: 1600, quality: 85 });
+const info = await rastermill.probe(imageBuffer);
+const jpeg = await rastermill.encode(imageBuffer, {
+  format: "jpeg",
+  resize: { maxSide: 1600 },
+  quality: 85,
+});
 ```
 
 Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
@@ -23,11 +27,11 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 | --- | --- |
 | [Configuration](./configuration.md) | `createRastermill`, options, pixel budgets, env vars, custom command resolution |
 | [Backends](./backends.md) | Backend selection order and automatic fallback |
-| [`metadata`](./metadata.md) | Read width/height without decoding; `readImageMetadataFromHeader` |
+| [`probe`](./metadata.md) | Read format, width/height, alpha hints, and orientation without decoding |
 | [`normalize`](./normalize.md) | Bake in EXIF orientation |
-| [`toJpeg`](./to-jpeg.md) | Resize and encode to JPEG |
-| [`toPng`](./to-png.md) | Resize and encode to PNG; `encodePngRgba` |
-| [`optimizePng`](./optimize-png.md) | Shrink a PNG under a byte budget |
+| [`encode`](./to-jpeg.md) | Resize and encode to JPEG or PNG |
+| [`encodeWithinBytes`](./optimize-png.md) | Search size/quality/compression axes under a byte budget |
+| Compatibility wrappers | `metadata`, `toJpeg`, `toPng`, `optimizePng`, `convertHeicToJpeg`, `hasAlpha` |
 | [`convertHeicToJpeg`](./convert-heic-to-jpeg.md) | Convert HEIC/AVIF to JPEG |
 | [`hasAlpha`](./has-alpha.md) | Detect a transparent channel |
 | [Error handling](./error-handling.md) | `RastermillUnavailableError`, `isRastermillUnavailableError` |
@@ -36,8 +40,9 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 
 Create a configured instance with `createRastermill(options)`, or use the
 default-configured module functions: `metadata`, `normalize`, `toJpeg`,
-`toPng`, `optimizePng`, `convertHeicToJpeg`, and `hasAlpha` are all exported
-directly and share a single default `Rastermill` instance.
+`probe`, `encode`, `encodeWithinBytes`, `toPng`, `optimizePng`,
+`convertHeicToJpeg`, and `hasAlpha` are all exported directly and share a
+single default `Rastermill` instance.
 
 ## Safety model
 

@@ -22,18 +22,19 @@ When `backend: "auto"`, the candidate list depends on the operation and the
 platform. Photon is tried first whenever it can handle the format, then native
 tools fill the gaps.
 
-`metadata`, `normalize`, `toJpeg`, `optimizePng`, `hasAlpha`:
+`probe`, `metadata`, `normalize`, `encode` to JPEG, `encodeWithinBytes`,
+`hasAlpha`:
 
 - macOS: `photon → sips → imagemagick → graphicsmagick → ffmpeg`
 - Windows: `photon → windows-native → imagemagick → graphicsmagick → ffmpeg`
 - Linux/other: `photon → imagemagick → graphicsmagick → ffmpeg`
 
-`toPng` (ffmpeg/sips can't be relied on for PNG resize):
+`encode` to PNG / `toPng` (ffmpeg/sips can't be relied on for PNG resize):
 
 - Windows: `photon → windows-native → imagemagick → graphicsmagick`
 - everywhere else: `photon → imagemagick → graphicsmagick`
 
-`convertHeicToJpeg` (Photon can't decode HEIC/AVIF):
+`encode` HEIC/AVIF to JPEG / `convertHeicToJpeg` (Photon can't decode HEIC/AVIF):
 
 - macOS: `sips → imagemagick → graphicsmagick → ffmpeg`
 - everywhere else: `imagemagick → graphicsmagick → ffmpeg`

@@ -1,16 +1,18 @@
-# `toPng`
+# `encode` to PNG
 
 Resize an image so its longest side fits a limit, then encode it as PNG —
 preserving transparency.
 
 ```ts
+encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>
 toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer>
 ```
 
 ```ts
-const png = await rastermill.toPng(buffer, {
-  maxSide: 1024,
-  compressionLevel: 8,
+const png = await rastermill.encode(buffer, {
+  format: "png",
+  resize: { maxSide: 1024 },
+  png: { compressionLevel: 8 },
 });
 ```
 
@@ -18,9 +20,12 @@ const png = await rastermill.toPng(buffer, {
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `maxSide` | `number` | — (required) | Target for the longest edge, in pixels. Aspect ratio is preserved. |
-| `compressionLevel` | `number` | `6` | Deflate level, `0`–`9`. Higher is smaller but slower. |
-| `withoutEnlargement` | `boolean` | `true` | When `true`, never upscale. Set `false` to allow enlargement. |
+| `format` | `"png"` | — (required) | Output format. |
+| `resize.maxSide` | `number` | source size | Target for the longest edge, in pixels. Aspect ratio is preserved. |
+| `resize.enlarge` | `boolean` | `false` | Allow upscaling. |
+| `png.compressionLevel` | `number` | `6` | Deflate level, `0`–`9`. Higher is smaller but slower. |
+
+`toPng` is kept as a compatibility wrapper over `encode`.
 
 ## Behavior
 
@@ -43,7 +48,7 @@ The low-level encoder Rastermill uses internally is exported. Given a tightly pa
 RGBA buffer it produces a valid PNG (`Buffer`):
 
 ```ts
-import { encodePngRgba } from "@openclaw/rastermill";
+import { encodePngRgba } from "rastermill";
 
 const png = encodePngRgba(rgbaPixels, width, height, /* compressionLevel */ 6);
 ```

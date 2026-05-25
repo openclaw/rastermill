@@ -1,4 +1,5 @@
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,32 +20,6 @@ function rgbaImage(width: number, height: number, alpha = 255): Buffer {
     pixels[offset + 3] = alpha;
   }
   return encodePngRgba(pixels, width, height);
-}
-
-function jpegHeaderWithExifOrientation(width: number, height: number, orientation: number): Buffer {
-  const tiff = Buffer.alloc(26);
-  tiff.write("II", 0, "ascii");
-  tiff.writeUInt16LE(42, 2);
-  tiff.writeUInt32LE(8, 4);
-  tiff.writeUInt16LE(1, 8);
-  tiff.writeUInt16LE(0x0112, 10);
-  tiff.writeUInt16LE(3, 12);
-  tiff.writeUInt32LE(1, 14);
-  tiff.writeUInt16LE(orientation, 18);
-  const exifPayload = Buffer.concat([Buffer.from("Exif\0\0", "binary"), tiff]);
-  const app1 = Buffer.alloc(4);
-  app1.writeUInt16BE(0xffe1, 0);
-  app1.writeUInt16BE(exifPayload.length + 2, 2);
-
-  const sof0 = Buffer.alloc(19);
-  sof0.writeUInt16BE(0xffc0, 0);
-  sof0.writeUInt16BE(17, 2);
-  sof0[4] = 8;
-  sof0.writeUInt16BE(height, 5);
-  sof0.writeUInt16BE(width, 7);
-  sof0[9] = 3;
-
-  return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, exifPayload, sof0, Buffer.from([0xff, 0xd9])]);
 }
 
 function tiffImageFileDirectories(
@@ -86,7 +61,7 @@ describe("Rastermill", () => {
     vi.resetModules();
   });
 
-  it("reads image metadata from headers without decoding", () => {
+  it("reads image metadata and a full probe from headers without decoding", () => {
     const image = rgbaImage(16, 8);
 
     expect(readImageMetadataFromHeader(image)).toEqual({ width: 16, height: 8 });
@@ -99,7 +74,19 @@ describe("Rastermill", () => {
     });
   });
 
-  it("encodes PNG input to JPEG through the unified processor API", async () => {
+  it("probes within the pixel budget and returns null when over budget", async () => {
+    const rastermill = createRastermill({ limits: { inputPixels: 100 } });
+
+    await expect(rastermill.probe(rgbaImage(8, 8))).resolves.toMatchObject({
+      format: "png",
+      width: 8,
+      height: 8,
+      hasAlpha: true,
+    });
+    await expect(rastermill.probe(rgbaImage(20, 20))).resolves.toBeNull();
+  });
+
+  it("encodes PNG input to JPEG and reports the output dimensions", async () => {
     const rastermill = createRastermill();
     const source = rgbaImage(16, 8);
 
@@ -110,16 +97,7 @@ describe("Rastermill", () => {
     });
 
     expect(jpeg).toMatchObject({ format: "jpeg", width: 4, height: 2, bytes: jpeg.data.length });
-    await expect(rastermill.metadata(jpeg.data)).resolves.toEqual({ width: 4, height: 2 });
-  });
-
-  it("keeps compatibility wrappers delegating to encode", async () => {
-    const rastermill = createRastermill();
-    const source = rgbaImage(16, 8);
-
-    const jpeg = await rastermill.toJpeg(source, { maxSide: 4, quality: 82 });
-
-    await expect(rastermill.metadata(jpeg)).resolves.toEqual({ width: 4, height: 2 });
+    expect(readImageMetadataFromHeader(jpeg.data)).toEqual({ width: 4, height: 2 });
   });
 
   it("copies caller-owned buffers before async processing", async () => {
@@ -127,49 +105,49 @@ describe("Rastermill", () => {
     const source = rgbaImage(16, 8);
     const replacement = rgbaImage(64, 64);
 
-    const resize = rastermill.toJpeg(source, { maxSide: 4, quality: 82 });
+    const pending = rastermill.encode(source, { format: "jpeg", resize: { maxSide: 4 }, quality: 82 });
     replacement.copy(source, 0, 0, Math.min(source.length, replacement.length));
-    const jpeg = await resize;
+    const jpeg = await pending;
 
-    await expect(rastermill.metadata(jpeg)).resolves.toEqual({ width: 4, height: 2 });
+    expect(jpeg).toMatchObject({ width: 4, height: 2 });
   });
 
   it("resizes PNG input while preserving alpha", async () => {
     const rastermill = createRastermill();
     const source = rgbaImage(10, 6, 120);
 
-    const png = await rastermill.toPng(source, { maxSide: 5, compressionLevel: 9 });
-
-    await expect(rastermill.metadata(png)).resolves.toEqual({ width: 5, height: 3 });
-    await expect(rastermill.hasAlpha(png)).resolves.toBe(true);
-  });
-
-  it("optimizes PNG output under the requested byte cap when possible", async () => {
-    const rastermill = createRastermill();
-    const source = rgbaImage(64, 64, 255);
-    const { optimizePng } = rastermill;
-
-    const result = await optimizePng(source, {
-      maxBytes: 256,
-      sides: [16, 8],
-      compressionLevels: [9],
+    const png = await rastermill.encode(source, {
+      format: "png",
+      resize: { maxSide: 5 },
+      png: { compressionLevel: 9 },
     });
 
-    expect(result.optimizedSize).toBeLessThanOrEqual(256);
-    expect(result.resizeSide).toBeGreaterThan(0);
+    expect(png).toMatchObject({ format: "png", width: 5, height: 3 });
+    await expect(rastermill.probe(png.data)).resolves.toMatchObject({ hasAlpha: true });
   });
 
-  it("generalizes byte-budget encoding across formats", async () => {
+  it("encodes under a byte budget by searching dimensions and compression", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(64, 64, 255);
+
+    const result = await rastermill.encodeWithinBytes(source, {
+      format: "png",
+      maxBytes: 256,
+      search: { maxSide: [16, 8], compressionLevel: [9] },
+    });
+
+    expect(result.bytes).toBeLessThanOrEqual(256);
+    expect(result.chosen.maxSide).toBeGreaterThan(0);
+  });
+
+  it("searches quality when encoding JPEG within a byte budget", async () => {
     const rastermill = createRastermill();
     const source = rgbaImage(64, 64, 255);
 
     const result = await rastermill.encodeWithinBytes(source, {
       format: "jpeg",
       maxBytes: 700,
-      search: {
-        maxSide: [32, 16],
-        quality: [80, 50],
-      },
+      search: { maxSide: [32, 16], quality: [80, 50] },
     });
 
     expect(result.bytes).toBeLessThanOrEqual(700);
@@ -177,54 +155,22 @@ describe("Rastermill", () => {
     expect(result.chosen.quality).toBeGreaterThan(0);
   });
 
-  it("keeps the caller resize cap as the default byte-budget search side", async () => {
-    const rastermill = createRastermill();
-    const source = rgbaImage(64, 64, 255);
-
-    const result = await rastermill.encodeWithinBytes(source, {
-      format: "jpeg",
-      maxBytes: 10_000_000,
-      resize: { maxSide: 16 },
-    });
-
-    expect(result.width).toBeLessThanOrEqual(16);
-    expect(result.height).toBeLessThanOrEqual(16);
-    expect(result.chosen.maxSide).toBe(16);
-  });
-
   it("rejects images over the configured pixel budget before decoding", async () => {
-    const rastermill = createRastermill({ maxInputPixels: 100 });
+    const rastermill = createRastermill({ limits: { inputPixels: 100 } });
     const source = rgbaImage(20, 20);
 
-    await expect(rastermill.toJpeg(source, { maxSide: 8 })).rejects.toThrow(
-      "pixel input limit",
-    );
+    await expect(
+      rastermill.encode(source, { format: "jpeg", resize: { maxSide: 8 } }),
+    ).rejects.toThrow("pixel input limit");
   });
 
   it("rejects resize targets over the configured output pixel budget", async () => {
-    const rastermill = createRastermill({ maxOutputPixels: 100 });
+    const rastermill = createRastermill({ limits: { outputPixels: 100 } });
     const source = rgbaImage(1, 1);
 
     await expect(
-      rastermill.toJpeg(source, { maxSide: 100_000, withoutEnlargement: false }),
+      rastermill.encode(source, { format: "jpeg", resize: { maxSide: 100_000, enlarge: true } }),
     ).rejects.toThrow("pixel output limit");
-  });
-
-  it("validates normalize inputs before returning unchanged bytes", async () => {
-    const rastermill = createRastermill({ maxInputPixels: 100 });
-
-    await expect(rastermill.normalize(rgbaImage(20, 20))).rejects.toThrow("pixel input limit");
-  });
-
-  it("reports normalize backend unavailability as a normalize failure", async () => {
-    const rastermill = createRastermill({
-      backend: "imagemagick",
-      commandResolver: () => null,
-    });
-
-    await expect(rastermill.normalize(jpegHeaderWithExifOrientation(8, 4, 6))).rejects.toMatchObject({
-      operation: "normalize",
-    });
   });
 
   it("passes exact fill dimensions through to native backends", async () => {
@@ -265,22 +211,35 @@ describe("Rastermill", () => {
     const rastermill = createRastermill();
 
     await expect(
-      rastermill.encode(rgbaImage(8, 4), {
-        format: "jpeg",
-        resize: { fit: "cover", width: 4 },
-      }),
+      rastermill.encode(rgbaImage(8, 4), { format: "jpeg", resize: { fit: "cover", width: 4 } }),
     ).rejects.toThrow("resize.fit cover is not supported yet");
   });
 
+  it.runIf(process.platform === "darwin" && existsSync("/usr/bin/sips"))(
+    "encodes through the native sips backend",
+    async () => {
+      const rastermill = createRastermill({ backend: "sips" });
+
+      const jpeg = await rastermill.encode(rgbaImage(16, 8), {
+        format: "jpeg",
+        resize: { maxSide: 4 },
+      });
+
+      expect(jpeg).toMatchObject({ format: "jpeg", width: 4, height: 2 });
+    },
+  );
+
   it("uses the largest linked TIFF page for metadata and pixel limits", async () => {
-    const rastermill = createRastermill({ maxInputPixels: 25_000_000 });
+    const rastermill = createRastermill({ limits: { inputPixels: 25_000_000 } });
     const source = tiffImageFileDirectories([
       { width: 8, height: 8 },
       { width: 8000, height: 4000 },
     ]);
 
     expect(readImageMetadataFromHeader(source)).toEqual({ width: 8000, height: 4000 });
-    await expect(rastermill.toJpeg(source, { maxSide: 8 })).rejects.toThrow("pixel input limit");
+    await expect(
+      rastermill.encode(source, { format: "jpeg", resize: { maxSide: 8 } }),
+    ).rejects.toThrow("pixel input limit");
   });
 
   it("rejects TIFF SubIFD structures instead of guessing their pixel budget", () => {
@@ -293,9 +252,9 @@ describe("Rastermill", () => {
     const rastermill = createRastermill({ backend: "ffmpeg" });
     const source = rgbaImage(4, 4);
 
-    await expect(rastermill.toPng(source, { maxSide: 4 })).rejects.toBeInstanceOf(
-      RastermillUnavailableError,
-    );
+    await expect(
+      rastermill.encode(source, { format: "png", resize: { maxSide: 4 } }),
+    ).rejects.toBeInstanceOf(RastermillUnavailableError);
   });
 
   it("resolves native fallback commands through the injected resolver", async () => {
@@ -308,13 +267,13 @@ describe("Rastermill", () => {
       },
     });
 
-    await expect(rastermill.toJpeg(rgbaImage(4, 4), { maxSide: 4 })).rejects.toBeInstanceOf(
-      RastermillUnavailableError,
-    );
+    await expect(
+      rastermill.encode(rgbaImage(4, 4), { format: "jpeg", resize: { maxSide: 4 } }),
+    ).rejects.toBeInstanceOf(RastermillUnavailableError);
     expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
   });
 
-  it("uses the Rastermill backend env var without app-specific fallbacks", async () => {
+  it("reads the backend preference from the configured env var without app-specific fallbacks", async () => {
     const previousRastermillBackend = process.env.RASTERMILL_IMAGE_BACKEND;
     const previousOpenClawBackend = process.env.OPENCLAW_IMAGE_BACKEND;
     try {
@@ -328,9 +287,9 @@ describe("Rastermill", () => {
         },
       });
 
-      await expect(rastermill.toJpeg(rgbaImage(4, 4), { maxSide: 4 })).rejects.toBeInstanceOf(
-        RastermillUnavailableError,
-      );
+      await expect(
+        rastermill.encode(rgbaImage(4, 4), { format: "jpeg", resize: { maxSide: 4 } }),
+      ).rejects.toBeInstanceOf(RastermillUnavailableError);
       expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
     } finally {
       if (previousRastermillBackend === undefined) {
@@ -378,8 +337,9 @@ describe("Rastermill", () => {
     });
 
     await expect(
-      rastermill.toJpeg(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
-        maxSide: 2,
+      rastermill.encode(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
+        format: "jpeg",
+        resize: { maxSide: 2 },
         quality: 80,
       }),
     ).rejects.toThrow(/corrupt image payload/);

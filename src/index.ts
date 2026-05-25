@@ -43,14 +43,11 @@ export type RastermillOptions = {
     inputPixels?: number;
     outputPixels?: number;
   };
-  maxInputPixels?: number;
-  maxOutputPixels?: number;
   timeoutMs?: number;
   maxProcessBufferBytes?: number;
   env?: {
     backendVar?: string;
   };
-  envBackendVariable?: string;
   commandResolver?: ImageCommandResolver;
 };
 
@@ -108,31 +105,6 @@ export type EncodedImageWithinBytes = EncodedImage & {
   };
 };
 
-export type ResizeToJpegOptions = {
-  maxSide: number;
-  quality?: number;
-  withoutEnlargement?: boolean;
-};
-
-export type ResizeToPngOptions = {
-  maxSide: number;
-  compressionLevel?: number;
-  withoutEnlargement?: boolean;
-};
-
-export type OptimizePngOptions = {
-  maxBytes: number;
-  sides?: readonly number[];
-  compressionLevels?: readonly number[];
-};
-
-export type OptimizedPng = {
-  buffer: Buffer;
-  optimizedSize: number;
-  resizeSide: number;
-  compressionLevel: number;
-};
-
 type NativeEncodeOptions = {
   target: ImageMetadata;
   quality?: number;
@@ -142,28 +114,14 @@ type NativeEncodeOptions = {
 
 export type Rastermill = {
   probe(input: ImageInput): Promise<ImageProbe | null>;
-  metadata(input: ImageInput): Promise<ImageMetadata | null>;
-  normalize(input: ImageInput): Promise<Buffer>;
   encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
   encodeWithinBytes(
     input: ImageInput,
     options: EncodeWithinBytesOptions,
   ): Promise<EncodedImageWithinBytes>;
-  toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer>;
-  toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer>;
-  optimizePng(input: ImageInput, options: OptimizePngOptions): Promise<OptimizedPng>;
-  convertHeicToJpeg(input: ImageInput): Promise<Buffer>;
-  hasAlpha(input: ImageInput): Promise<boolean>;
 };
 
-type ImageOperation =
-  | "encode"
-  | "normalize"
-  | "toJpeg"
-  | "toPng"
-  | "optimizePng"
-  | "convertHeicToJpeg"
-  | "hasAlpha";
+type ImageOperation = "encode";
 
 type ExternalImageTool =
   | { backend: "sips"; flavor: "sips"; command: string }
@@ -253,16 +211,16 @@ function normalizePositiveInteger(value: number, label: string): number {
 }
 
 function normalizeOptions(options: RastermillOptions): ResolvedOptions {
-  const backendVar = options.env?.backendVar ?? options.envBackendVariable ?? "RASTERMILL_IMAGE_BACKEND";
+  const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
   const maxInputPixels = normalizePositiveInteger(
-    options.limits?.inputPixels ?? options.maxInputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
+    options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
     "limits.inputPixels",
   );
   return {
     backend: normalizeBackendPreference(options.backend ?? process.env[backendVar]),
     maxInputPixels,
     maxOutputPixels: normalizePositiveInteger(
-      options.limits?.outputPixels ?? options.maxOutputPixels ?? maxInputPixels,
+      options.limits?.outputPixels ?? maxInputPixels,
       "limits.outputPixels",
     ),
     timeoutMs: normalizePositiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs"),
@@ -1097,16 +1055,6 @@ function normalizeResizeOptions(
   };
 }
 
-function normalizeLegacyResizeOptions(
-  resizeOptions: ResizeToJpegOptions | ResizeToPngOptions,
-): ResizeOptions {
-  return {
-    fit: "inside",
-    maxSide: resizeOptions.maxSide,
-    enlarge: resizeOptions.withoutEnlargement === false,
-  };
-}
-
 function targetDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptions): ImageMetadata {
   if (metadata.width <= 0 || metadata.height <= 0) {
     throw new Error("Invalid image dimensions");
@@ -1151,42 +1099,6 @@ function autoOrientedMetadata(buffer: Buffer, metadata: ImageMetadata, autoOrien
     : metadata;
 }
 
-function nativeEncodeOptions(
-  metadata: ImageMetadata,
-  encodeOptions: EncodeOptions,
-  resize: NormalizedResizeOptions,
-): NativeEncodeOptions {
-  return {
-    target: targetDimensions(metadata, resize),
-    ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
-    ...(encodeOptions.png?.compressionLevel === undefined
-      ? {}
-      : { compressionLevel: encodeOptions.png.compressionLevel }),
-  };
-}
-
-function legacyJpegOptions(
-  metadata: ImageMetadata,
-  encodeOptions: EncodeOptions,
-  resize: NormalizedResizeOptions,
-): NativeEncodeOptions {
-  return {
-    ...nativeEncodeOptions(metadata, encodeOptions, resize),
-    quality: encodeOptions.quality ?? DEFAULT_JPEG_QUALITY,
-  };
-}
-
-function legacyPngOptions(
-  metadata: ImageMetadata,
-  encodeOptions: EncodeOptions,
-  resize: NormalizedResizeOptions,
-): NativeEncodeOptions {
-  return {
-    ...nativeEncodeOptions(metadata, encodeOptions, resize),
-    compressionLevel: encodeOptions.png?.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
-  };
-}
-
 function assertOutputPixelBudget(
   metadata: ImageMetadata,
   resize: NormalizedResizeOptions,
@@ -1198,13 +1110,6 @@ function assertOutputPixelBudget(
       `Image resize target exceeds the ${maxOutputPixels.toLocaleString("en-US")} pixel output limit: ${target.width}x${target.height}`,
     );
   }
-}
-
-function remapUnavailableOperation(error: unknown, operation: ImageOperation): never {
-  if (error instanceof RastermillUnavailableError) {
-    throw new RastermillUnavailableError(operation, error.message, error.causes);
-  }
-  throw error;
 }
 
 function resizePhotonImage(
@@ -1328,7 +1233,6 @@ async function runWithBackends<T>(
   format: EncodedImageFormat,
   options: ResolvedOptions,
   fn: (backend: ImageBackend) => Promise<T>,
-  operation: ImageOperation = "encode",
 ): Promise<T> {
   const errors: unknown[] = [];
   const backends = backendsForFormat(format, options.backend);
@@ -1343,7 +1247,7 @@ async function runWithBackends<T>(
     }
   }
   throw new RastermillUnavailableError(
-    operation,
+    "encode",
     `Image processor unavailable for ${format} encoding; tried: ${backends.join(", ")}`,
     errors,
   );
@@ -1814,67 +1718,6 @@ async function externalConvertToJpeg(
   });
 }
 
-async function externalHasAlpha(
-  backend: Exclude<ImageBackend, "photon">,
-  buffer: Buffer,
-  options: ResolvedOptions,
-): Promise<boolean> {
-  const tool = await resolveExternalTool(backend, options);
-  if (!tool || tool.flavor === "sips" || tool.flavor === "ffmpeg" || tool.flavor === "powershell") {
-    throw new Error(`Image backend ${backend} is not available for alpha inspection`);
-  }
-  return await withImageTemp(async (workspace) => {
-    const input = await workspace.write("in.img", buffer);
-    const identifyCommand =
-      tool.flavor === "convert" ? await resolveExecutable("identify", options) : tool.command;
-    if (!identifyCommand) {
-      throw new Error("ImageMagick identify is not available for alpha inspection");
-    }
-    const args =
-      tool.flavor === "gm"
-        ? ["identify", "-format", "%A", firstImageScene(tool, input)]
-        : tool.flavor === "magick"
-          ? ["identify", "-format", "%[channels]", firstImageScene(tool, input)]
-          : ["-format", "%[channels]", firstImageScene(tool, input)];
-    const { stdout } = await execFileAsync(identifyCommand, args, {
-      timeout: options.timeoutMs,
-      maxBuffer: options.maxProcessBufferBytes,
-    });
-    return tool.flavor === "gm"
-      ? parseGraphicsMagickAlpha(stdout)
-      : parseImageMagickChannelsAlpha(stdout);
-  });
-}
-
-function parseGraphicsMagickAlpha(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return (
-    normalized === "true" ||
-    normalized === "on" ||
-    normalized === "yes" ||
-    normalized === "1" ||
-    normalized === "matte"
-  );
-}
-
-function parseImageMagickChannelsAlpha(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized === "gray" || normalized === "grey" || normalized === "rgb") {
-    return false;
-  }
-  const tokens = normalized.split(/[^a-z0-9]+/u).filter(Boolean);
-  return tokens.some((token) =>
-    token === "alpha" ||
-    token === "a" ||
-    token === "rgba" ||
-    token === "srgba" ||
-    token === "cmyka" ||
-    token === "graya" ||
-    token === "greya" ||
-    token.endsWith("alpha")
-  );
-}
-
 function readRequiredEncodedMetadata(data: Buffer, format: EncodedImageFormat): ImageMetadata {
   const metadata = readImageMetadataFromHeader(data);
   if (!metadata) {
@@ -2082,126 +1925,6 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       }
       throw new Error("Failed to encode image within byte budget");
     },
-
-    async metadata(input) {
-      const info = await rastermill.probe(input);
-      return info ? { width: info.width, height: info.height } : null;
-    },
-
-    async normalize(input) {
-      const buffer = toBuffer(input);
-      assertHeaderPixelBudget(buffer, options.maxInputPixels);
-      const info = await rastermill.probe(buffer);
-      if (!info?.orientation || info.orientation === 1) {
-        return buffer;
-      }
-      try {
-        return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
-      } catch (error) {
-        return remapUnavailableOperation(error, "normalize");
-      }
-    },
-
-    async toJpeg(input, resizeOptions) {
-      try {
-        return (
-          await rastermill.encode(input, {
-            format: "jpeg",
-            resize: normalizeLegacyResizeOptions(resizeOptions),
-            ...(resizeOptions.quality === undefined ? {} : { quality: resizeOptions.quality }),
-          })
-        ).data;
-      } catch (error) {
-        return remapUnavailableOperation(error, "toJpeg");
-      }
-    },
-
-    async toPng(input, resizeOptions) {
-      try {
-        return (
-          await rastermill.encode(input, {
-            format: "png",
-            resize: normalizeLegacyResizeOptions(resizeOptions),
-            png:
-              resizeOptions.compressionLevel === undefined
-                ? {}
-                : { compressionLevel: resizeOptions.compressionLevel },
-          })
-        ).data;
-      } catch (error) {
-        return remapUnavailableOperation(error, "toPng");
-      }
-    },
-
-    async optimizePng(input, optimizeOptions) {
-      try {
-        const out = await rastermill.encodeWithinBytes(input, {
-          format: "png",
-          maxBytes: optimizeOptions.maxBytes,
-          search: {
-            ...(optimizeOptions.sides === undefined ? {} : { maxSide: optimizeOptions.sides }),
-            ...(optimizeOptions.compressionLevels === undefined
-              ? {}
-              : { compressionLevel: optimizeOptions.compressionLevels }),
-          },
-        });
-        return {
-          buffer: out.data,
-          optimizedSize: out.bytes,
-          resizeSide: out.chosen.maxSide ?? out.width,
-          compressionLevel: out.chosen.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
-        };
-      } catch (error) {
-        return remapUnavailableOperation(error, "optimizePng");
-      }
-    },
-
-    async convertHeicToJpeg(input) {
-      const buffer = toBuffer(input);
-      assertHeaderPixelBudget(buffer, options.maxInputPixels);
-      return await runWithBackends(
-        "jpeg",
-        options,
-        async (backend) => {
-          if (backend === "photon") {
-            throw new Error("Photon cannot decode HEIC/AVIF images");
-          }
-          return await externalConvertToJpeg(backend, buffer, options);
-        },
-        "convertHeicToJpeg",
-      );
-    },
-
-    async hasAlpha(input) {
-      const buffer = toBuffer(input);
-      assertHeaderPixelBudget(buffer, options.maxInputPixels);
-      const pngAlpha = readPngAlphaChannel(buffer);
-      if (pngAlpha !== null) {
-        return pngAlpha;
-      }
-      return await runWithBackends(
-        "png",
-        options,
-        async (backend) => {
-          if (backend === "photon") {
-            const { image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
-            try {
-              const pixels = image.get_raw_pixels();
-              for (let offset = 3; offset < pixels.length; offset += 4) {
-                if ((pixels[offset] ?? 255) < 255) {
-                  return true;
-                }
-              }
-              return false;
-            } finally {
-              image.free();
-            }
-          }
-          return await externalHasAlpha(backend, buffer, options);
-        },
-        "hasAlpha",
-      );
-    },
   };
   return rastermill;
 }
@@ -2216,14 +1939,6 @@ export async function probe(input: ImageInput): Promise<ImageProbe | null> {
   return await defaultRastermill.probe(input);
 }
 
-export async function metadata(input: ImageInput): Promise<ImageMetadata | null> {
-  return await defaultRastermill.metadata(input);
-}
-
-export async function normalize(input: ImageInput): Promise<Buffer> {
-  return await defaultRastermill.normalize(input);
-}
-
 export async function encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage> {
   return await defaultRastermill.encode(input, options);
 }
@@ -2233,27 +1948,4 @@ export async function encodeWithinBytes(
   options: EncodeWithinBytesOptions,
 ): Promise<EncodedImageWithinBytes> {
   return await defaultRastermill.encodeWithinBytes(input, options);
-}
-
-export async function toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer> {
-  return await defaultRastermill.toJpeg(input, options);
-}
-
-export async function toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer> {
-  return await defaultRastermill.toPng(input, options);
-}
-
-export async function optimizePng(
-  input: ImageInput,
-  options: OptimizePngOptions,
-): Promise<OptimizedPng> {
-  return await defaultRastermill.optimizePng(input, options);
-}
-
-export async function convertHeicToJpeg(input: ImageInput): Promise<Buffer> {
-  return await defaultRastermill.convertHeicToJpeg(input);
-}
-
-export async function hasAlpha(input: ImageInput): Promise<boolean> {
-  return await defaultRastermill.hasAlpha(input);
 }

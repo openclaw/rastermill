@@ -27,26 +27,20 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 | --- | --- |
 | [Configuration](./configuration.md) | `createRastermill`, options, pixel budgets, env vars, custom command resolution |
 | [Backends](./backends.md) | Backend selection order and automatic fallback |
-| [`probe`](./metadata.md) | Read format, width/height, alpha hints, and orientation without decoding |
-| [`normalize`](./normalize.md) | Bake in EXIF orientation |
-| [`encode`](./to-jpeg.md) | Resize and encode to JPEG or PNG |
-| [`encodeWithinBytes`](./optimize-png.md) | Search size/quality/compression axes under a byte budget |
-| Compatibility wrappers | `metadata`, `toJpeg`, `toPng`, `optimizePng`, `convertHeicToJpeg`, `hasAlpha` |
-| [`convertHeicToJpeg`](./convert-heic-to-jpeg.md) | Convert HEIC/AVIF to JPEG |
-| [`hasAlpha`](./has-alpha.md) | Detect a transparent channel |
+| [`probe`](./probe.md) | Read format, width/height, alpha, and orientation without decoding |
+| [`encode`](./encode.md) | Resize and re-encode to JPEG or PNG, including HEIC/AVIF → JPEG |
+| [`encodeWithinBytes`](./encode-within-bytes.md) | Search size/quality/compression under a byte budget |
 | [Error handling](./error-handling.md) | `RastermillUnavailableError`, `isRastermillUnavailableError` |
 
 ## Two ways to call
 
 Create a configured instance with `createRastermill(options)`, or use the
-default-configured module functions: `metadata`, `normalize`, `toJpeg`,
-`probe`, `encode`, `encodeWithinBytes`, `toPng`, `optimizePng`,
-`convertHeicToJpeg`, and `hasAlpha` are all exported directly and share a
-single default `Rastermill` instance.
+default-configured module functions: `probe`, `encode`, and `encodeWithinBytes`
+are exported directly and share a single default `Rastermill` instance.
 
 ## Safety model
 
 Rastermill refuses to process images it can't size up. It rejects images with
-unknown dimensions, inputs larger than `maxInputPixels`, and resize targets
-larger than `maxOutputPixels`. External tools run with a timeout and a bounded
-output buffer. See [Configuration](./configuration.md) for the knobs.
+unknown dimensions, inputs larger than `limits.inputPixels`, and resize targets
+larger than `limits.outputPixels`. External tools run with a timeout and a
+bounded output buffer. See [Configuration](./configuration.md) for the knobs.

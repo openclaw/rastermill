@@ -31,30 +31,19 @@ const jpeg = await rastermill.encode(imageBuffer, {
 const rastermill = createRastermill(options);
 ```
 
-Core methods:
+The API is three methods:
 
-- `probe(input)`
-- `metadata(input)`
-- `normalize(input)`
-- `encode(input, options)`
-- `encodeWithinBytes(input, options)`
-- `toJpeg(input, options)`
-- `toPng(input, options)`
-- `optimizePng(input, options)`
-- `convertHeicToJpeg(input)`
-- `hasAlpha(input)`
+- `probe(input)` — read `format`, `width`, `height`, `hasAlpha`, and `orientation` from the header, without a full decode.
+- `encode(input, options)` — resize and re-encode to a `format` (`"jpeg"` or `"png"`); returns the bytes plus the final dimensions.
+- `encodeWithinBytes(input, options)` — encode under a byte budget, searching across dimensions, quality, and compression.
 
-Convenience functions with default options are also exported:
+The same three are also exported as standalone functions backed by a default-configured instance:
 
-- `probe(input)`
-- `metadata(input)`
-- `encode(input, options)`
-- `encodeWithinBytes(input, options)`
-- `toJpeg(input, options)`
-- `toPng(input, options)`
-- `optimizePng(input, options)`
-- `convertHeicToJpeg(input)`
-- `hasAlpha(input)`
+```ts
+import { probe, encode, encodeWithinBytes } from "rastermill";
+```
+
+A straight format conversion (e.g. HEIC/AVIF → JPEG) is just `encode(input, { format: "jpeg" })` with no `resize`. EXIF orientation is baked in by default; pass `autoOrient: false` to skip it.
 
 ## Backends
 

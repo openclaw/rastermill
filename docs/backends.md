@@ -10,34 +10,29 @@ single backend.
 | Backend | Engine | Notes |
 | --- | --- | --- |
 | `photon` | In-process WASM ([Photon](https://github.com/silvia-odwyer/photon)) | Fast, no external process. Decodes PNG, JPEG, GIF, WebP. Cannot decode HEIC/AVIF. |
-| `sips` | macOS `/usr/bin/sips` | macOS only. JPEG/HEIC work; not used for PNG resize or alpha checks. |
-| `windows-native` | Windows PowerShell + `System.Drawing` | Windows only. JPEG and PNG resize; does not convert HEIC or inspect alpha. |
+| `sips` | macOS `/usr/bin/sips` | macOS only. JPEG output (incl. HEIC/AVIF → JPEG); not used for PNG. |
+| `windows-native` | Windows PowerShell + `System.Drawing` | Windows only. JPEG and PNG; does not convert HEIC. |
 | `imagemagick` | `magick` (or `convert`) | Broad format support, including HEIC/AVIF where codecs are installed. |
 | `graphicsmagick` | `gm` | Similar coverage to ImageMagick. |
-| `ffmpeg` | `ffmpeg` | Used for JPEG output and HEIC→JPEG; not used for PNG resize or alpha checks. |
+| `ffmpeg` | `ffmpeg` | Used for JPEG output and HEIC→JPEG; not used for PNG. |
 
 ## Automatic order
 
-When `backend: "auto"`, the candidate list depends on the operation and the
+When `backend: "auto"`, the candidate list depends on the output format and the
 platform. Photon is tried first whenever it can handle the format, then native
 tools fill the gaps.
 
-`probe`, `metadata`, `normalize`, `encode` to JPEG, `encodeWithinBytes`,
-`hasAlpha`:
+`encode` to JPEG (this also covers HEIC/AVIF → JPEG, where Photon fails to decode
+and falls through to native):
 
 - macOS: `photon → sips → imagemagick → graphicsmagick → ffmpeg`
 - Windows: `photon → windows-native → imagemagick → graphicsmagick → ffmpeg`
 - Linux/other: `photon → imagemagick → graphicsmagick → ffmpeg`
 
-`encode` to PNG / `toPng` (ffmpeg/sips can't be relied on for PNG resize):
+`encode` to PNG (ffmpeg/sips can't be relied on for PNG):
 
 - Windows: `photon → windows-native → imagemagick → graphicsmagick`
 - everywhere else: `photon → imagemagick → graphicsmagick`
-
-`encode` HEIC/AVIF to JPEG / `convertHeicToJpeg` (Photon can't decode HEIC/AVIF):
-
-- macOS: `sips → imagemagick → graphicsmagick → ffmpeg`
-- everywhere else: `imagemagick → graphicsmagick → ffmpeg`
 
 ## How fallback works
 

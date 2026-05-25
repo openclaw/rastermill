@@ -17,9 +17,8 @@ const rastermill = createRastermill({
 });
 ```
 
-`createRastermill(options?)` returns a `Rastermill` with `probe`, `encode`,
-`encodeWithinBytes`, and compatibility wrappers such as `metadata`, `toJpeg`,
-`toPng`, `optimizePng`, `convertHeicToJpeg`, and `hasAlpha`.
+`createRastermill(options?)` returns a `Rastermill` with `probe`, `encode`, and
+`encodeWithinBytes`.
 
 ## Options
 
@@ -28,12 +27,9 @@ const rastermill = createRastermill({
 | `backend` | `ImageBackendPreference` | `"auto"` (or env) | Force a backend or let Rastermill pick. See [Backends](./backends.md). |
 | `limits.inputPixels` | `number` | `25_000_000` | Reject decoding any image whose `width × height` exceeds this. |
 | `limits.outputPixels` | `number` | falls back to `limits.inputPixels`, else `25_000_000` | Reject resize targets larger than this. |
-| `maxInputPixels` | `number` | `25_000_000` | Compatibility alias for `limits.inputPixels`. |
-| `maxOutputPixels` | `number` | input limit | Compatibility alias for `limits.outputPixels`. |
 | `timeoutMs` | `number` | `20_000` | Per-invocation timeout for external tools. |
 | `maxProcessBufferBytes` | `number` | `1_048_576` (1 MiB) | Max stdout/stderr captured from an external tool. |
 | `env.backendVar` | `string` | `"RASTERMILL_IMAGE_BACKEND"` | Name of the env var read for the backend preference. |
-| `envBackendVariable` | `string` | `"RASTERMILL_IMAGE_BACKEND"` | Compatibility alias for `env.backendVar`. |
 | `commandResolver` | `ImageCommandResolver` | PATH lookup | Resolve an external command name to an absolute path (or `null` if absent). |
 
 All numeric options must be positive safe integers; otherwise `createRastermill`
@@ -42,24 +38,24 @@ throws.
 ## Pixel budgets
 
 Rastermill never trusts an image it cannot measure. Before any decode it reads the
-header dimensions and checks them against `maxInputPixels`; an image with
+header dimensions and checks them against `limits.inputPixels`; an image with
 unknown dimensions or one over the limit is refused. For resize operations it
-also projects the output dimensions and checks them against `maxOutputPixels`.
+also projects the output dimensions and checks them against `limits.outputPixels`.
 
 This guards against decompression bombs: a small file claiming enormous
 dimensions is rejected before a decoder allocates memory for it.
 
 ```ts
 const rastermill = createRastermill({ limits: { inputPixels: 4_000_000 } });
-await rastermill.toJpeg(hugeImage, { maxSide: 1024 }); // throws if input > 4 MP
+await rastermill.encode(hugeImage, { format: "jpeg", resize: { maxSide: 1024 } }); // throws if input > 4 MP
 ```
 
 ## Backend preference from the environment
 
-When `backend` is not passed, Rastermill reads the preference from the environment.
-It checks `env.backendVar` or `envBackendVariable` (default
-`RASTERMILL_IMAGE_BACKEND`). Values are case-insensitive and a few aliases are
-accepted. App-specific environment names are intentionally not hard-coded; pass
+When `backend` is not passed, Rastermill reads the preference from the environment
+variable named by `env.backendVar` (default `RASTERMILL_IMAGE_BACKEND`). Values
+are case-insensitive and a few aliases are accepted. App-specific environment
+names are intentionally not hard-coded; pass
 `env: { backendVar: "YOUR_APP_IMAGE_BACKEND" }` if you need one.
 
 - `windows`, `powershell`, `system.drawing`, `systemdrawing` → `windows-native`
@@ -90,8 +86,8 @@ For one-off calls you can skip `createRastermill` and import the functions direc
 They use a default `Rastermill` instance (`backend: "auto"`, 25 MP budgets):
 
 ```ts
-import { metadata, toJpeg } from "rastermill";
+import { probe, encode } from "rastermill";
 
-const info = await metadata(buf);
-const jpeg = await toJpeg(buf, { maxSide: 1600 });
+const info = await probe(buf);
+const jpeg = await encode(buf, { format: "jpeg", resize: { maxSide: 1600 } });
 ```

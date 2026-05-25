@@ -11,13 +11,13 @@ executables, a missing Photon package, unsupported formats, or absent codecs.
 ```ts
 class RastermillUnavailableError extends Error {
   readonly code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
-  readonly operation: ImageOperation; // e.g. "encode", "toJpeg"
-  readonly causes: unknown[];         // the per-backend errors collected
+  readonly operation: "encode";
+  readonly causes: unknown[]; // the per-backend errors collected
 }
 ```
 
 - `code` is the stable string `"RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE"`.
-- `operation` names the failing operation.
+- `operation` is always `"encode"` (the single operation that runs backends).
 - `causes` holds the error thrown by each attempted backend, in order. The
   standard `Error.cause` is set to the first `Error` among them.
 - `message` lists the backends Rastermill tried.
@@ -57,10 +57,10 @@ being mistaken for a missing tool.
 Pixel-budget and option violations throw plain `Error`s before any backend
 runs, with descriptive messages:
 
-- dimensions exceed `maxInputPixels`
-- resize target exceeds `maxOutputPixels`
+- dimensions exceed `limits.inputPixels`
+- resize target exceeds `limits.outputPixels`
 - unknown dimensions ("refusing to process")
-- invalid option values (e.g. a non-positive `maxSide`)
+- invalid option values (e.g. a non-positive `resize.maxSide`)
 
-Note that [`metadata`](./metadata.md) is lenient: it returns `null` instead of
+Note that [`probe`](./probe.md) is lenient: it returns `null` instead of
 throwing when an image is over budget or undecodable.

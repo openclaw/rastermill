@@ -76,12 +76,12 @@ function normalizePositiveInteger(value, label) {
     return value;
 }
 function normalizeOptions(options) {
-    const backendVar = options.env?.backendVar ?? options.envBackendVariable ?? "RASTERMILL_IMAGE_BACKEND";
-    const maxInputPixels = normalizePositiveInteger(options.limits?.inputPixels ?? options.maxInputPixels ?? DEFAULT_MAX_INPUT_PIXELS, "limits.inputPixels");
+    const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
+    const maxInputPixels = normalizePositiveInteger(options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS, "limits.inputPixels");
     return {
         backend: normalizeBackendPreference(options.backend ?? process.env[backendVar]),
         maxInputPixels,
-        maxOutputPixels: normalizePositiveInteger(options.limits?.outputPixels ?? options.maxOutputPixels ?? maxInputPixels, "limits.outputPixels"),
+        maxOutputPixels: normalizePositiveInteger(options.limits?.outputPixels ?? maxInputPixels, "limits.outputPixels"),
         timeoutMs: normalizePositiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs"),
         maxProcessBufferBytes: normalizePositiveInteger(options.maxProcessBufferBytes ?? DEFAULT_MAX_PROCESS_BUFFER_BYTES, "maxProcessBufferBytes"),
         commandResolver: options.commandResolver ?? resolveExecutableFromPath,
@@ -780,13 +780,6 @@ function normalizeResizeOptions(resize, metadata) {
         enlarge: resize.enlarge === true,
     };
 }
-function normalizeLegacyResizeOptions(resizeOptions) {
-    return {
-        fit: "inside",
-        maxSide: resizeOptions.maxSide,
-        enlarge: resizeOptions.withoutEnlargement === false,
-    };
-}
 function targetDimensions(metadata, resize) {
     if (metadata.width <= 0 || metadata.height <= 0) {
         throw new Error("Invalid image dimensions");
@@ -827,38 +820,11 @@ function autoOrientedMetadata(buffer, metadata, autoOrient) {
         ? { width: metadata.height, height: metadata.width }
         : metadata;
 }
-function nativeEncodeOptions(metadata, encodeOptions, resize) {
-    return {
-        target: targetDimensions(metadata, resize),
-        ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
-        ...(encodeOptions.png?.compressionLevel === undefined
-            ? {}
-            : { compressionLevel: encodeOptions.png.compressionLevel }),
-    };
-}
-function legacyJpegOptions(metadata, encodeOptions, resize) {
-    return {
-        ...nativeEncodeOptions(metadata, encodeOptions, resize),
-        quality: encodeOptions.quality ?? DEFAULT_JPEG_QUALITY,
-    };
-}
-function legacyPngOptions(metadata, encodeOptions, resize) {
-    return {
-        ...nativeEncodeOptions(metadata, encodeOptions, resize),
-        compressionLevel: encodeOptions.png?.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
-    };
-}
 function assertOutputPixelBudget(metadata, resize, maxOutputPixels) {
     const target = targetDimensions(metadata, resize);
     if (target.width > Math.floor(maxOutputPixels / target.height)) {
         throw new Error(`Image resize target exceeds the ${maxOutputPixels.toLocaleString("en-US")} pixel output limit: ${target.width}x${target.height}`);
     }
-}
-function remapUnavailableOperation(error, operation) {
-    if (error instanceof RastermillUnavailableError) {
-        throw new RastermillUnavailableError(operation, error.message, error.causes);
-    }
-    throw error;
 }
 function resizePhotonImage(photon, image, resize) {
     const size = targetSize(image, resize);
@@ -954,7 +920,7 @@ function isBackendUnavailable(error) {
         detail.includes("support for this compression format has not been built in") ||
         detail.includes("unsupported image format"));
 }
-async function runWithBackends(format, options, fn, operation = "encode") {
+async function runWithBackends(format, options, fn) {
     const errors = [];
     const backends = backendsForFormat(format, options.backend);
     for (const backend of backends) {
@@ -968,7 +934,7 @@ async function runWithBackends(format, options, fn, operation = "encode") {
             }
         }
     }
-    throw new RastermillUnavailableError(operation, `Image processor unavailable for ${format} encoding; tried: ${backends.join(", ")}`, errors);
+    throw new RastermillUnavailableError("encode", `Image processor unavailable for ${format} encoding; tried: ${backends.join(", ")}`, errors);
 }
 function clampInteger(value, min, max) {
     return Math.max(min, Math.min(max, Math.round(value)));
@@ -1344,54 +1310,6 @@ async function externalConvertToJpeg(backend, buffer, options, jpegOptions = {})
         return await workspace.read("out.jpg");
     });
 }
-async function externalHasAlpha(backend, buffer, options) {
-    const tool = await resolveExternalTool(backend, options);
-    if (!tool || tool.flavor === "sips" || tool.flavor === "ffmpeg" || tool.flavor === "powershell") {
-        throw new Error(`Image backend ${backend} is not available for alpha inspection`);
-    }
-    return await withImageTemp(async (workspace) => {
-        const input = await workspace.write("in.img", buffer);
-        const identifyCommand = tool.flavor === "convert" ? await resolveExecutable("identify", options) : tool.command;
-        if (!identifyCommand) {
-            throw new Error("ImageMagick identify is not available for alpha inspection");
-        }
-        const args = tool.flavor === "gm"
-            ? ["identify", "-format", "%A", firstImageScene(tool, input)]
-            : tool.flavor === "magick"
-                ? ["identify", "-format", "%[channels]", firstImageScene(tool, input)]
-                : ["-format", "%[channels]", firstImageScene(tool, input)];
-        const { stdout } = await execFileAsync(identifyCommand, args, {
-            timeout: options.timeoutMs,
-            maxBuffer: options.maxProcessBufferBytes,
-        });
-        return tool.flavor === "gm"
-            ? parseGraphicsMagickAlpha(stdout)
-            : parseImageMagickChannelsAlpha(stdout);
-    });
-}
-function parseGraphicsMagickAlpha(value) {
-    const normalized = value.trim().toLowerCase();
-    return (normalized === "true" ||
-        normalized === "on" ||
-        normalized === "yes" ||
-        normalized === "1" ||
-        normalized === "matte");
-}
-function parseImageMagickChannelsAlpha(value) {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized || normalized === "gray" || normalized === "grey" || normalized === "rgb") {
-        return false;
-    }
-    const tokens = normalized.split(/[^a-z0-9]+/u).filter(Boolean);
-    return tokens.some((token) => token === "alpha" ||
-        token === "a" ||
-        token === "rgba" ||
-        token === "srgba" ||
-        token === "cmyka" ||
-        token === "graya" ||
-        token === "greya" ||
-        token.endsWith("alpha"));
-}
 function readRequiredEncodedMetadata(data, format) {
     const metadata = readImageMetadataFromHeader(data);
     if (!metadata) {
@@ -1563,109 +1481,6 @@ function createProcessor(options) {
             }
             throw new Error("Failed to encode image within byte budget");
         },
-        async metadata(input) {
-            const info = await rastermill.probe(input);
-            return info ? { width: info.width, height: info.height } : null;
-        },
-        async normalize(input) {
-            const buffer = toBuffer(input);
-            assertHeaderPixelBudget(buffer, options.maxInputPixels);
-            const info = await rastermill.probe(buffer);
-            if (!info?.orientation || info.orientation === 1) {
-                return buffer;
-            }
-            try {
-                return (await rastermill.encode(buffer, { format: "jpeg", autoOrient: true })).data;
-            }
-            catch (error) {
-                return remapUnavailableOperation(error, "normalize");
-            }
-        },
-        async toJpeg(input, resizeOptions) {
-            try {
-                return (await rastermill.encode(input, {
-                    format: "jpeg",
-                    resize: normalizeLegacyResizeOptions(resizeOptions),
-                    ...(resizeOptions.quality === undefined ? {} : { quality: resizeOptions.quality }),
-                })).data;
-            }
-            catch (error) {
-                return remapUnavailableOperation(error, "toJpeg");
-            }
-        },
-        async toPng(input, resizeOptions) {
-            try {
-                return (await rastermill.encode(input, {
-                    format: "png",
-                    resize: normalizeLegacyResizeOptions(resizeOptions),
-                    png: resizeOptions.compressionLevel === undefined
-                        ? {}
-                        : { compressionLevel: resizeOptions.compressionLevel },
-                })).data;
-            }
-            catch (error) {
-                return remapUnavailableOperation(error, "toPng");
-            }
-        },
-        async optimizePng(input, optimizeOptions) {
-            try {
-                const out = await rastermill.encodeWithinBytes(input, {
-                    format: "png",
-                    maxBytes: optimizeOptions.maxBytes,
-                    search: {
-                        ...(optimizeOptions.sides === undefined ? {} : { maxSide: optimizeOptions.sides }),
-                        ...(optimizeOptions.compressionLevels === undefined
-                            ? {}
-                            : { compressionLevel: optimizeOptions.compressionLevels }),
-                    },
-                });
-                return {
-                    buffer: out.data,
-                    optimizedSize: out.bytes,
-                    resizeSide: out.chosen.maxSide ?? out.width,
-                    compressionLevel: out.chosen.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
-                };
-            }
-            catch (error) {
-                return remapUnavailableOperation(error, "optimizePng");
-            }
-        },
-        async convertHeicToJpeg(input) {
-            const buffer = toBuffer(input);
-            assertHeaderPixelBudget(buffer, options.maxInputPixels);
-            return await runWithBackends("jpeg", options, async (backend) => {
-                if (backend === "photon") {
-                    throw new Error("Photon cannot decode HEIC/AVIF images");
-                }
-                return await externalConvertToJpeg(backend, buffer, options);
-            }, "convertHeicToJpeg");
-        },
-        async hasAlpha(input) {
-            const buffer = toBuffer(input);
-            assertHeaderPixelBudget(buffer, options.maxInputPixels);
-            const pngAlpha = readPngAlphaChannel(buffer);
-            if (pngAlpha !== null) {
-                return pngAlpha;
-            }
-            return await runWithBackends("png", options, async (backend) => {
-                if (backend === "photon") {
-                    const { image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
-                    try {
-                        const pixels = image.get_raw_pixels();
-                        for (let offset = 3; offset < pixels.length; offset += 4) {
-                            if ((pixels[offset] ?? 255) < 255) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    }
-                    finally {
-                        image.free();
-                    }
-                }
-                return await externalHasAlpha(backend, buffer, options);
-            }, "hasAlpha");
-        },
     };
     return rastermill;
 }
@@ -1676,31 +1491,10 @@ const defaultRastermill = createRastermill();
 export async function probe(input) {
     return await defaultRastermill.probe(input);
 }
-export async function metadata(input) {
-    return await defaultRastermill.metadata(input);
-}
-export async function normalize(input) {
-    return await defaultRastermill.normalize(input);
-}
 export async function encode(input, options) {
     return await defaultRastermill.encode(input, options);
 }
 export async function encodeWithinBytes(input, options) {
     return await defaultRastermill.encodeWithinBytes(input, options);
-}
-export async function toJpeg(input, options) {
-    return await defaultRastermill.toJpeg(input, options);
-}
-export async function toPng(input, options) {
-    return await defaultRastermill.toPng(input, options);
-}
-export async function optimizePng(input, options) {
-    return await defaultRastermill.optimizePng(input, options);
-}
-export async function convertHeicToJpeg(input) {
-    return await defaultRastermill.convertHeicToJpeg(input);
-}
-export async function hasAlpha(input) {
-    return await defaultRastermill.hasAlpha(input);
 }
 //# sourceMappingURL=index.js.map

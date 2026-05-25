@@ -13,11 +13,16 @@ export type ImageProbe = ImageMetadata & {
 export type ImageBackend = "photon" | "sips" | "windows-native" | "imagemagick" | "graphicsmagick" | "ffmpeg";
 export type ImageBackendPreference = ImageBackend | "auto";
 export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
+export type TempPrefixResolver = () => string;
 export type RastermillOptions = {
     backend?: ImageBackendPreference;
     limits?: {
         inputPixels?: number;
         outputPixels?: number;
+    };
+    temp?: {
+        rootDir?: string;
+        prefix?: string | TempPrefixResolver;
     };
     timeoutMs?: number;
     maxProcessBufferBytes?: number;

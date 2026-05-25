@@ -36,12 +36,17 @@ export type ImageBackend =
 
 export type ImageBackendPreference = ImageBackend | "auto";
 export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
+export type TempPrefixResolver = () => string;
 
 export type RastermillOptions = {
   backend?: ImageBackendPreference;
   limits?: {
     inputPixels?: number;
     outputPixels?: number;
+  };
+  temp?: {
+    rootDir?: string;
+    prefix?: string | TempPrefixResolver;
   };
   timeoutMs?: number;
   maxProcessBufferBytes?: number;
@@ -55,6 +60,8 @@ type ResolvedOptions = {
   backend: ImageBackendPreference;
   maxInputPixels: number;
   maxOutputPixels: number;
+  tempRootDir: string;
+  tempPrefix: string | TempPrefixResolver;
   timeoutMs: number;
   maxProcessBufferBytes: number;
   commandResolver: ImageCommandResolver;
@@ -135,6 +142,7 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_PROCESS_BUFFER_BYTES = 1024 * 1024;
 const DEFAULT_JPEG_QUALITY = 85;
 const DEFAULT_PNG_COMPRESSION_LEVEL = 6;
+const DEFAULT_TEMP_PREFIX = "rastermill-";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const DEFAULT_PNG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
 const DEFAULT_PNG_COMPRESSION_LEVELS = [6, 7, 8, 9] as const;
@@ -210,12 +218,34 @@ function normalizePositiveInteger(value: number, label: string): number {
   return value;
 }
 
+function normalizeTempRootDir(value: string | undefined): string {
+  const rootDir = value ?? os.tmpdir();
+  if (rootDir.trim().length === 0) {
+    throw new Error("temp.rootDir must not be empty");
+  }
+  return rootDir;
+}
+
+function validateTempPrefix(value: string): string {
+  if (value.length === 0) {
+    throw new Error("temp.prefix must not be empty");
+  }
+  if (value.includes("/") || value.includes("\\")) {
+    throw new Error("temp.prefix must be a filename prefix");
+  }
+  return value;
+}
+
 function normalizeOptions(options: RastermillOptions): ResolvedOptions {
   const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
   const maxInputPixels = normalizePositiveInteger(
     options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
     "limits.inputPixels",
   );
+  const tempPrefix = options.temp?.prefix ?? DEFAULT_TEMP_PREFIX;
+  if (typeof tempPrefix === "string") {
+    validateTempPrefix(tempPrefix);
+  }
   return {
     backend: normalizeBackendPreference(options.backend ?? process.env[backendVar]),
     maxInputPixels,
@@ -223,6 +253,8 @@ function normalizeOptions(options: RastermillOptions): ResolvedOptions {
       options.limits?.outputPixels ?? maxInputPixels,
       "limits.outputPixels",
     ),
+    tempRootDir: normalizeTempRootDir(options.temp?.rootDir),
+    tempPrefix,
     timeoutMs: normalizePositiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs"),
     maxProcessBufferBytes: normalizePositiveInteger(
       options.maxProcessBufferBytes ?? DEFAULT_MAX_PROCESS_BUFFER_BYTES,
@@ -639,7 +671,12 @@ export function readImageProbeFromHeader(input: ImageInput): ImageProbe | null {
   }
   const heif = readIsoBmffImageMetadata(buffer);
   if (heif) {
-    return { ...heif, format: isAvifImage(buffer) ? "avif" : "heif", hasAlpha: null, orientation: null };
+    return {
+      ...heif,
+      format: isAvifImage(buffer) ? "avif" : "heif",
+      hasAlpha: null,
+      orientation: null,
+    };
   }
   const jpeg = readJpegMetadata(buffer);
   if (jpeg) {
@@ -1002,10 +1039,7 @@ async function loadOrientedPhotonImage(
       grayscaleAlpha.height,
     );
   }
-  validatePixelBudget(
-    { width: decoded.get_width(), height: decoded.get_height() },
-    maxInputPixels,
-  );
+  validatePixelBudget({ width: decoded.get_width(), height: decoded.get_height() }, maxInputPixels);
   return { photon, image: autoOrient ? applyExifOrientation(photon, decoded, buffer) : decoded };
 }
 
@@ -1081,7 +1115,8 @@ function targetDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptio
   const widthScale = boxWidth === undefined ? Number.POSITIVE_INFINITY : boxWidth / metadata.width;
   const heightScale =
     boxHeight === undefined ? Number.POSITIVE_INFINITY : boxHeight / metadata.height;
-  const requestedScale = resize.fit === "cover" ? Math.max(widthScale, heightScale) : Math.min(widthScale, heightScale);
+  const requestedScale =
+    resize.fit === "cover" ? Math.max(widthScale, heightScale) : Math.min(widthScale, heightScale);
   const scale = resize.enlarge ? requestedScale : Math.min(1, requestedScale);
   return {
     width: Math.max(1, Math.round(metadata.width * scale)),
@@ -1089,7 +1124,11 @@ function targetDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptio
   };
 }
 
-function autoOrientedMetadata(buffer: Buffer, metadata: ImageMetadata, autoOrient: boolean): ImageMetadata {
+function autoOrientedMetadata(
+  buffer: Buffer,
+  metadata: ImageMetadata,
+  autoOrient: boolean,
+): ImageMetadata {
   if (!autoOrient) {
     return metadata;
   }
@@ -1324,12 +1363,21 @@ async function resolveExternalTool(
   return ffmpeg ? { backend, flavor: "ffmpeg", command: ffmpeg } : null;
 }
 
-async function withImageTemp<T>(fn: (workspace: {
-  path(name: string): string;
-  write(name: string, buffer: Buffer): Promise<string>;
-  read(name: string): Promise<Buffer>;
-}) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-rastermill-"));
+function resolveTempPrefix(options: ResolvedOptions): string {
+  const prefix =
+    typeof options.tempPrefix === "function" ? options.tempPrefix() : options.tempPrefix;
+  return validateTempPrefix(prefix);
+}
+
+async function withImageTemp<T>(
+  options: ResolvedOptions,
+  fn: (workspace: {
+    path(name: string): string;
+    write(name: string, buffer: Buffer): Promise<string>;
+    read(name: string): Promise<Buffer>;
+  }) => Promise<T>,
+): Promise<T> {
+  const dir = await mkdtemp(path.join(options.tempRootDir, resolveTempPrefix(options)));
   try {
     return await fn({
       path: (name) => path.join(dir, name),
@@ -1345,11 +1393,7 @@ async function withImageTemp<T>(fn: (workspace: {
   }
 }
 
-async function runTool(
-  command: string,
-  args: string[],
-  options: ResolvedOptions,
-): Promise<void> {
+async function runTool(command: string, args: string[], options: ResolvedOptions): Promise<void> {
   await execFileAsync(command, args, {
     timeout: options.timeoutMs,
     maxBuffer: options.maxProcessBufferBytes,
@@ -1417,7 +1461,7 @@ async function sipsApplyOrientation(
   if (args.length === 0) {
     return buffer;
   }
-  return await withImageTemp(async (workspace) => {
+  return await withImageTemp(options, async (workspace) => {
     const input = await workspace.write("in.jpg", buffer);
     const output = workspace.path("out.jpg");
     await runTool(tool.command, [...args, input, "--out", output], options);
@@ -1506,7 +1550,7 @@ async function windowsNativeResize(
   format: "jpeg" | "png",
   options: ResolvedOptions,
 ): Promise<Buffer> {
-  return await withImageTemp(async (workspace) => {
+  return await withImageTemp(options, async (workspace) => {
     const scriptPath = await workspace.write(
       "resize.ps1",
       Buffer.from(WINDOWS_NATIVE_RESIZE_SCRIPT, "utf8"),
@@ -1549,10 +1593,9 @@ async function externalToJpeg(
   }
   const quality = clampInteger(native.quality ?? DEFAULT_JPEG_QUALITY, 1, 100);
   if (tool.flavor === "sips") {
-    return await withImageTemp(async (workspace) => {
-      const oriented = native.autoOrient === false
-        ? buffer
-        : await sipsApplyOrientation(tool, buffer, options);
+    return await withImageTemp(options, async (workspace) => {
+      const oriented =
+        native.autoOrient === false ? buffer : await sipsApplyOrientation(tool, buffer, options);
       const input = await workspace.write("in.img", oriented);
       const output = workspace.path("out.jpg");
       await runTool(
@@ -1579,7 +1622,7 @@ async function externalToJpeg(
   if (tool.flavor === "powershell") {
     return await windowsNativeResize(tool, buffer, native, "jpeg", options);
   }
-  return await withImageTemp(async (workspace) => {
+  return await withImageTemp(options, async (workspace) => {
     const input = await workspace.write("in.img", buffer);
     const output = workspace.path("out.jpg");
     if (tool.flavor === "ffmpeg") {
@@ -1631,7 +1674,7 @@ async function externalToPng(
   if (tool.flavor === "powershell") {
     return await windowsNativeResize(tool, buffer, native, "png", options);
   }
-  return await withImageTemp(async (workspace) => {
+  return await withImageTemp(options, async (workspace) => {
     const input = await workspace.write("in.img", buffer);
     const output = workspace.path("out.png");
     const args = [
@@ -1663,26 +1706,17 @@ async function externalConvertToJpeg(
   }
   const quality = clampInteger(jpegOptions.quality ?? DEFAULT_JPEG_QUALITY, 1, 100);
   const autoOrient = jpegOptions.autoOrient !== false;
-  return await withImageTemp(async (workspace) => {
-    const oriented = tool.flavor === "sips" && autoOrient
-      ? await sipsApplyOrientation(tool, buffer, options)
-      : buffer;
+  return await withImageTemp(options, async (workspace) => {
+    const oriented =
+      tool.flavor === "sips" && autoOrient
+        ? await sipsApplyOrientation(tool, buffer, options)
+        : buffer;
     const input = await workspace.write("in.img", oriented);
     const output = workspace.path("out.jpg");
     if (tool.flavor === "sips") {
       await runTool(
         tool.command,
-        [
-          "-s",
-          "format",
-          "jpeg",
-          "-s",
-          "formatOptions",
-          String(quality),
-          input,
-          "--out",
-          output,
-        ],
+        ["-s", "format", "jpeg", "-s", "formatOptions", String(quality), input, "--out", output],
         options,
       );
     } else if (tool.flavor === "powershell") {
@@ -1708,11 +1742,7 @@ async function externalConvertToJpeg(
         args.push("-auto-orient");
       }
       args.push("-quality", String(quality), output);
-      await runConvertTool(
-        tool,
-        args,
-        options,
-      );
+      await runConvertTool(tool, args, options);
     }
     return await workspace.read("out.jpg");
   });
@@ -1823,14 +1853,20 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                 buffer,
                 {
                   target: targetDimensions(orientedMetadata, resize),
-                  ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
-                  ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
+                  ...(encodeOptions.quality === undefined
+                    ? {}
+                    : { quality: encodeOptions.quality }),
+                  ...(encodeOptions.autoOrient === undefined
+                    ? {}
+                    : { autoOrient: encodeOptions.autoOrient }),
                 },
                 options,
               )
             : await externalConvertToJpeg(backend, buffer, options, {
                 ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
-                ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
+                ...(encodeOptions.autoOrient === undefined
+                  ? {}
+                  : { autoOrient: encodeOptions.autoOrient }),
               });
           return encodedImage(jpeg, "jpeg");
         }
@@ -1848,7 +1884,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                 ...(encodeOptions.png?.compressionLevel === undefined
                   ? {}
                   : { compressionLevel: encodeOptions.png.compressionLevel }),
-                ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
+                ...(encodeOptions.autoOrient === undefined
+                  ? {}
+                  : { autoOrient: encodeOptions.autoOrient }),
               },
               options,
             ),
@@ -1862,9 +1900,8 @@ function createProcessor(options: ResolvedOptions): Rastermill {
     async encodeWithinBytes(input, encodeOptions) {
       const buffer = toBuffer(input);
       const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
-      const defaultMaxSides = encodeOptions.format === "png"
-        ? [...DEFAULT_PNG_SIDES]
-        : [2048, 1536, 1280, 1024, 800];
+      const defaultMaxSides =
+        encodeOptions.format === "png" ? [...DEFAULT_PNG_SIDES] : [2048, 1536, 1280, 1024, 800];
       const resizeMaxSide = encodeOptions.resize?.maxSide;
       const maxSides = encodeOptions.search?.maxSide?.length
         ? [...encodeOptions.search.maxSide]
@@ -1883,7 +1920,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       let smallest: EncodedImageWithinBytes | null = null;
       let firstEncodeError: unknown;
       for (const side of maxSides) {
-        for (const quality of encodeOptions.format === "jpeg" ? qualities : [encodeOptions.quality]) {
+        for (const quality of encodeOptions.format === "jpeg"
+          ? qualities
+          : [encodeOptions.quality]) {
           for (const compressionLevel of encodeOptions.format === "png"
             ? compressionLevels
             : [encodeOptions.png?.compressionLevel]) {

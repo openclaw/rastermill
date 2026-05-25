@@ -12,6 +12,10 @@ const rastermill = createRastermill({
     inputPixels: 25_000_000,
     outputPixels: 25_000_000,
   },
+  temp: {
+    rootDir: "/tmp",
+    prefix: "rastermill-",
+  },
   timeoutMs: 20_000,
   maxProcessBufferBytes: 1024 * 1024,
 });
@@ -27,6 +31,8 @@ const rastermill = createRastermill({
 | `backend` | `ImageBackendPreference` | `"auto"` (or env) | Force a backend or let Rastermill pick. See [Backends](./backends.md). |
 | `limits.inputPixels` | `number` | `25_000_000` | Reject decoding any image whose `width × height` exceeds this. |
 | `limits.outputPixels` | `number` | falls back to `limits.inputPixels`, else `25_000_000` | Reject resize targets larger than this. |
+| `temp.rootDir` | `string` | OS temp dir | Parent directory for external-backend workspaces. |
+| `temp.prefix` | `string \| () => string` | `"rastermill-"` | Filename prefix passed to `mkdtemp` for external-backend workspaces. |
 | `timeoutMs` | `number` | `20_000` | Per-invocation timeout for external tools. |
 | `maxProcessBufferBytes` | `number` | `1_048_576` (1 MiB) | Max stdout/stderr captured from an external tool. |
 | `env.backendVar` | `string` | `"RASTERMILL_IMAGE_BACKEND"` | Name of the env var read for the backend preference. |
@@ -34,6 +40,7 @@ const rastermill = createRastermill({
 
 All numeric options must be positive safe integers; otherwise `createRastermill`
 throws.
+`temp.prefix` must be a filename prefix, not a path.
 
 ## Pixel budgets
 
@@ -48,6 +55,21 @@ dimensions is rejected before a decoder allocates memory for it.
 ```ts
 const rastermill = createRastermill({ limits: { inputPixels: 4_000_000 } });
 await rastermill.encode(hugeImage, { format: "jpeg", resize: { maxSide: 1024 } }); // throws if input > 4 MP
+```
+
+## External backend temp workspaces
+
+External backends receive image bytes through a temporary workspace. Use
+`temp.rootDir` when your app has a private temp root, and use a `temp.prefix`
+function when each operation needs a fresh traceable prefix.
+
+```ts
+const rastermill = createRastermill({
+  temp: {
+    rootDir: "/run/my-app/tmp",
+    prefix: () => `my-app-img-${crypto.randomUUID()}-`,
+  },
+});
 ```
 
 ## Backend preference from the environment

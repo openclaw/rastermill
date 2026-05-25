@@ -105,7 +105,11 @@ describe("Rastermill", () => {
     const source = rgbaImage(16, 8);
     const replacement = rgbaImage(64, 64);
 
-    const pending = rastermill.encode(source, { format: "jpeg", resize: { maxSide: 4 }, quality: 82 });
+    const pending = rastermill.encode(source, {
+      format: "jpeg",
+      resize: { maxSide: 4 },
+      quality: 82,
+    });
     replacement.copy(source, 0, 0, Math.min(source.length, replacement.length));
     const jpeg = await pending;
 
@@ -176,6 +180,7 @@ describe("Rastermill", () => {
   it("passes exact fill dimensions through to native backends", async () => {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-native-test-"));
     try {
+      const tempRoot = await mkdtemp(path.join(tmp, "secure-root-"));
       const log = path.join(tmp, "args.json");
       const script = path.join(tmp, "magick.js");
       const outputPng = rgbaImage(4, 4).toString("base64");
@@ -192,6 +197,7 @@ describe("Rastermill", () => {
       await chmod(script, 0o755);
       const rastermill = createRastermill({
         backend: "imagemagick",
+        temp: { rootDir: tempRoot, prefix: "custom-img-" },
         commandResolver: (command) => (command === "magick" ? script : null),
       });
 
@@ -201,7 +207,12 @@ describe("Rastermill", () => {
       });
 
       expect(result).toMatchObject({ width: 4, height: 4 });
-      expect(JSON.parse(await readFile(log, "utf8"))).toContain("4x4!");
+      const args = JSON.parse(await readFile(log, "utf8")) as string[];
+      expect(args).toContain("4x4!");
+      const inputArg = args.find((arg) => arg.endsWith("in.img[0]"));
+      expect(inputArg).toBeDefined();
+      const inputPath = inputArg?.slice(0, -"[0]".length) ?? "";
+      expect(path.relative(tempRoot, inputPath).startsWith("custom-img-")).toBe(true);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

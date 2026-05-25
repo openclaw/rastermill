@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRastermill,
   encodePngRgba,
@@ -51,6 +51,11 @@ function tiffImageFileDirectories(
 }
 
 describe("Rastermill", () => {
+  afterEach(() => {
+    vi.doUnmock("@silvia-odwyer/photon-node");
+    vi.resetModules();
+  });
+
   it("reads image metadata from headers without decoding", () => {
     const image = rgbaImage(16, 8);
 
@@ -161,5 +166,45 @@ describe("Rastermill", () => {
       RastermillUnavailableError,
     );
     expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
+  });
+
+  it("does not fall back to native tools after a real Photon processing error", async () => {
+    vi.resetModules();
+    vi.doMock("@silvia-odwyer/photon-node", () => {
+      const image = {
+        free: vi.fn(),
+        get_height: vi.fn(() => 4),
+        get_width: vi.fn(() => 4),
+      };
+      return {
+        PhotonImage: {
+          new_from_byteslice: vi.fn(() => image),
+        },
+        SamplingFilter: {
+          Lanczos3: 1,
+        },
+        resize: vi.fn(() => {
+          throw new Error("corrupt image payload");
+        }),
+      };
+    });
+
+    const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+      await import("../src/index.js");
+    const requested: string[] = [];
+    const rastermill = createFreshRastermill({
+      commandResolver: (command) => {
+        requested.push(command);
+        return command;
+      },
+    });
+
+    await expect(
+      rastermill.toJpeg(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
+        maxSide: 2,
+        quality: 80,
+      }),
+    ).rejects.toThrow(/corrupt image payload/);
+    expect(requested).toEqual([]);
   });
 });

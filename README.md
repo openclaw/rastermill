@@ -8,7 +8,7 @@ Photon for fast in-process image work and can fall back to native tools such as
 codec support.
 
 ```ts
-import { createRastermill } from "@openclaw/rastermill";
+import { createRastermill } from "rastermill";
 
 const rastermill = createRastermill({
   maxInputPixels: 25_000_000,

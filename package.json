@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/prism",
+  "name": "@openclaw/rastermill",
   "version": "0.1.0",
   "description": "Fast, portable image processing for Node agents.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/prism.git"
+    "url": "git+https://github.com/openclaw/rastermill.git"
   },
-  "homepage": "https://github.com/openclaw/prism#readme",
+  "homepage": "https://github.com/openclaw/rastermill#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/prism/issues"
+    "url": "https://github.com/openclaw/rastermill/issues"
   },
   "keywords": [
     "image",

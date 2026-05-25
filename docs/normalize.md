@@ -8,16 +8,16 @@ normalize(input: ImageInput): Promise<Buffer>
 ```
 
 ```ts
-const upright = await prism.normalize(jpegBuffer);
+const upright = await rastermill.normalize(jpegBuffer);
 ```
 
 ## Behavior
 
-Prism reads the JPEG EXIF orientation tag:
+Rastermill reads the JPEG EXIF orientation tag:
 
 - If there is no orientation tag, or it's already `1` (normal), the **input
   buffer is returned unchanged** — no re-encode, no quality loss.
-- Otherwise Prism rotates/flips the pixels to match the orientation and
+- Otherwise Rastermill rotates/flips the pixels to match the orientation and
   re-encodes. The Photon path emits JPEG at quality 90; native backends
   (`sips`, ImageMagick, GraphicsMagick, ffmpeg) apply their auto-orient and
   re-encode.

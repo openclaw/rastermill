@@ -1,22 +1,22 @@
-# Prism
+# Rastermill
 
 Fast, portable image processing for Node agents.
 
-Prism provides a small image-processing API for server-side Node code. It uses
+Rastermill provides a small image-processing API for server-side Node code. It uses
 Photon for fast in-process image work and can fall back to native tools such as
 `sips`, ImageMagick, GraphicsMagick, or ffmpeg for formats that need external
 codec support.
 
 ```ts
-import { createPrism } from "@openclaw/prism";
+import { createRastermill } from "@openclaw/rastermill";
 
-const prism = createPrism({
+const rastermill = createRastermill({
   maxInputPixels: 25_000_000,
   maxOutputPixels: 25_000_000,
 });
 
-const info = await prism.metadata(imageBuffer);
-const jpeg = await prism.toJpeg(imageBuffer, {
+const info = await rastermill.metadata(imageBuffer);
+const jpeg = await rastermill.toJpeg(imageBuffer, {
   maxSide: 1600,
   quality: 85,
 });
@@ -25,7 +25,7 @@ const jpeg = await prism.toJpeg(imageBuffer, {
 ## API
 
 ```ts
-const prism = createPrism(options);
+const rastermill = createRastermill(options);
 ```
 
 Core methods:
@@ -54,6 +54,6 @@ when a format or operation needs external codec support. You can force a backend
 with `backend: "photon"`, `"sips"`, `"imagemagick"`, `"graphicsmagick"`, or
 `"ffmpeg"`.
 
-Prism refuses to decode images with unknown dimensions, images larger than the
+Rastermill refuses to decode images with unknown dimensions, images larger than the
 configured input pixel budget, or resize targets larger than the configured
 output pixel budget.

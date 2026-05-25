@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  createPrism,
+  createRastermill,
   encodePngRgba,
-  PrismUnavailableError,
+  RastermillUnavailableError,
   readImageMetadataFromHeader,
 } from "../src/index.js";
 
@@ -50,7 +50,7 @@ function tiffImageFileDirectories(
   return buffer;
 }
 
-describe("Prism", () => {
+describe("Rastermill", () => {
   it("reads image metadata from headers without decoding", () => {
     const image = rgbaImage(16, 8);
 
@@ -58,40 +58,40 @@ describe("Prism", () => {
   });
 
   it("resizes PNG input to JPEG through the elegant processor API", async () => {
-    const prism = createPrism();
+    const rastermill = createRastermill();
     const source = rgbaImage(16, 8);
 
-    const jpeg = await prism.toJpeg(source, { maxSide: 4, quality: 82 });
+    const jpeg = await rastermill.toJpeg(source, { maxSide: 4, quality: 82 });
 
-    await expect(prism.metadata(jpeg)).resolves.toEqual({ width: 4, height: 2 });
+    await expect(rastermill.metadata(jpeg)).resolves.toEqual({ width: 4, height: 2 });
   });
 
   it("copies caller-owned buffers before async processing", async () => {
-    const prism = createPrism();
+    const rastermill = createRastermill();
     const source = rgbaImage(16, 8);
     const replacement = rgbaImage(64, 64);
 
-    const resize = prism.toJpeg(source, { maxSide: 4, quality: 82 });
+    const resize = rastermill.toJpeg(source, { maxSide: 4, quality: 82 });
     replacement.copy(source, 0, 0, Math.min(source.length, replacement.length));
     const jpeg = await resize;
 
-    await expect(prism.metadata(jpeg)).resolves.toEqual({ width: 4, height: 2 });
+    await expect(rastermill.metadata(jpeg)).resolves.toEqual({ width: 4, height: 2 });
   });
 
   it("resizes PNG input while preserving alpha", async () => {
-    const prism = createPrism();
+    const rastermill = createRastermill();
     const source = rgbaImage(10, 6, 120);
 
-    const png = await prism.toPng(source, { maxSide: 5, compressionLevel: 9 });
+    const png = await rastermill.toPng(source, { maxSide: 5, compressionLevel: 9 });
 
-    await expect(prism.metadata(png)).resolves.toEqual({ width: 5, height: 3 });
-    await expect(prism.hasAlpha(png)).resolves.toBe(true);
+    await expect(rastermill.metadata(png)).resolves.toEqual({ width: 5, height: 3 });
+    await expect(rastermill.hasAlpha(png)).resolves.toBe(true);
   });
 
   it("optimizes PNG output under the requested byte cap when possible", async () => {
-    const prism = createPrism();
+    const rastermill = createRastermill();
     const source = rgbaImage(64, 64, 255);
-    const { optimizePng } = prism;
+    const { optimizePng } = rastermill;
 
     const result = await optimizePng(source, {
       maxBytes: 256,
@@ -104,32 +104,32 @@ describe("Prism", () => {
   });
 
   it("rejects images over the configured pixel budget before decoding", async () => {
-    const prism = createPrism({ maxInputPixels: 100 });
+    const rastermill = createRastermill({ maxInputPixels: 100 });
     const source = rgbaImage(20, 20);
 
-    await expect(prism.toJpeg(source, { maxSide: 8 })).rejects.toThrow(
+    await expect(rastermill.toJpeg(source, { maxSide: 8 })).rejects.toThrow(
       "pixel input limit",
     );
   });
 
   it("rejects resize targets over the configured output pixel budget", async () => {
-    const prism = createPrism({ maxOutputPixels: 100 });
+    const rastermill = createRastermill({ maxOutputPixels: 100 });
     const source = rgbaImage(1, 1);
 
     await expect(
-      prism.toJpeg(source, { maxSide: 100_000, withoutEnlargement: false }),
+      rastermill.toJpeg(source, { maxSide: 100_000, withoutEnlargement: false }),
     ).rejects.toThrow("pixel output limit");
   });
 
   it("uses the largest linked TIFF page for metadata and pixel limits", async () => {
-    const prism = createPrism({ maxInputPixels: 25_000_000 });
+    const rastermill = createRastermill({ maxInputPixels: 25_000_000 });
     const source = tiffImageFileDirectories([
       { width: 8, height: 8 },
       { width: 8000, height: 4000 },
     ]);
 
     expect(readImageMetadataFromHeader(source)).toEqual({ width: 8000, height: 4000 });
-    await expect(prism.toJpeg(source, { maxSide: 8 })).rejects.toThrow("pixel input limit");
+    await expect(rastermill.toJpeg(source, { maxSide: 8 })).rejects.toThrow("pixel input limit");
   });
 
   it("rejects TIFF SubIFD structures instead of guessing their pixel budget", () => {
@@ -139,17 +139,17 @@ describe("Prism", () => {
   });
 
   it("reports unavailable forced backends with structured errors", async () => {
-    const prism = createPrism({ backend: "ffmpeg" });
+    const rastermill = createRastermill({ backend: "ffmpeg" });
     const source = rgbaImage(4, 4);
 
-    await expect(prism.toPng(source, { maxSide: 4 })).rejects.toBeInstanceOf(
-      PrismUnavailableError,
+    await expect(rastermill.toPng(source, { maxSide: 4 })).rejects.toBeInstanceOf(
+      RastermillUnavailableError,
     );
   });
 
   it("resolves native fallback commands through the injected resolver", async () => {
     const requested: string[] = [];
-    const prism = createPrism({
+    const rastermill = createRastermill({
       backend: "imagemagick",
       commandResolver: (command) => {
         requested.push(command);
@@ -157,8 +157,8 @@ describe("Prism", () => {
       },
     });
 
-    await expect(prism.toJpeg(rgbaImage(4, 4), { maxSide: 4 })).rejects.toBeInstanceOf(
-      PrismUnavailableError,
+    await expect(rastermill.toJpeg(rgbaImage(4, 4), { maxSide: 4 })).rejects.toBeInstanceOf(
+      RastermillUnavailableError,
     );
     expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
   });

@@ -7,7 +7,7 @@ convertHeicToJpeg(input: ImageInput): Promise<Buffer>
 ```
 
 ```ts
-const jpeg = await prism.convertHeicToJpeg(heicBuffer);
+const jpeg = await rastermill.convertHeicToJpeg(heicBuffer);
 ```
 
 ## Behavior
@@ -23,7 +23,7 @@ Backend order under `backend: "auto"`:
 
 The output is JPEG. `sips` and the ImageMagick/GraphicsMagick path encode at
 quality 90; ffmpeg encodes at a comparable fixed quality. EXIF orientation is
-applied where the backend supports it (`sips` auto-orients via Prism;
+applied where the backend supports it (`sips` auto-orients via Rastermill;
 ImageMagick/GraphicsMagick use `-auto-orient`).
 
 > The `windows-native` backend does **not** convert HEIC — `System.Drawing`
@@ -32,7 +32,7 @@ ImageMagick/GraphicsMagick use `-auto-orient`).
 
 ## Failure
 
-If no native backend with HEIC support is available, Prism throws a
-[`PrismUnavailableError`](./error-handling.md) for the `convertHeicToJpeg`
+If no native backend with HEIC support is available, Rastermill throws a
+[`RastermillUnavailableError`](./error-handling.md) for the `convertHeicToJpeg`
 operation. Many systems need an explicit HEIC codec/delegate installed for
 ImageMagick or ffmpeg.

@@ -28,7 +28,7 @@ export type ImageBackend =
 export type ImageBackendPreference = ImageBackend | "auto";
 export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
 
-export type PrismOptions = {
+export type RastermillOptions = {
   backend?: ImageBackendPreference;
   maxInputPixels?: number;
   maxOutputPixels?: number;
@@ -63,7 +63,7 @@ export type OptimizedPng = {
   compressionLevel: number;
 };
 
-export type Prism = {
+export type Rastermill = {
   metadata(input: ImageInput): Promise<ImageMetadata | null>;
   normalize(input: ImageInput): Promise<Buffer>;
   toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer>;
@@ -134,8 +134,8 @@ const CRC_TABLE = (() => {
 
 let photonPromise: Promise<PhotonModule> | null = null;
 
-export class PrismUnavailableError extends Error {
-  readonly code = "PRISM_IMAGE_PROCESSOR_UNAVAILABLE";
+export class RastermillUnavailableError extends Error {
+  readonly code = "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
   readonly operation: ImageOperation;
   readonly causes: unknown[];
 
@@ -143,14 +143,14 @@ export class PrismUnavailableError extends Error {
     super(message, {
       cause: causes.find((cause): cause is Error => cause instanceof Error),
     });
-    this.name = "PrismUnavailableError";
+    this.name = "RastermillUnavailableError";
     this.operation = operation;
     this.causes = causes;
   }
 }
 
-export function isPrismUnavailableError(error: unknown): error is PrismUnavailableError {
-  return error instanceof PrismUnavailableError;
+export function isRastermillUnavailableError(error: unknown): error is RastermillUnavailableError {
+  return error instanceof RastermillUnavailableError;
 }
 
 function toBuffer(input: ImageInput): Buffer {
@@ -167,7 +167,7 @@ function normalizePositiveInteger(value: number, label: string): number {
   return value;
 }
 
-function normalizeOptions(options: PrismOptions): Required<PrismOptions> {
+function normalizeOptions(options: RastermillOptions): Required<RastermillOptions> {
   return {
     backend: normalizeBackendPreference(
       options.backend ?? readBackendPreferenceFromEnv(options.envBackendVariable),
@@ -1066,7 +1066,7 @@ function isBackendUnavailable(error: unknown): boolean {
 
 async function runWithBackends<T>(
   operation: ImageOperation,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
   fn: (backend: ImageBackend) => Promise<T>,
 ): Promise<T> {
   const errors: unknown[] = [];
@@ -1081,7 +1081,7 @@ async function runWithBackends<T>(
       }
     }
   }
-  throw new PrismUnavailableError(
+  throw new RastermillUnavailableError(
     operation,
     `Image processor unavailable for ${operation}; tried: ${backends.join(", ")}`,
     errors,
@@ -1118,14 +1118,14 @@ async function resolveExecutableFromPath(command: string): Promise<string | null
 
 async function resolveExecutable(
   command: string,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<string | null> {
   return await options.commandResolver(command);
 }
 
 async function resolveExternalTool(
   backend: Exclude<ImageBackend, "photon">,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<ExternalImageTool | null> {
   if (backend === "sips") {
     return process.platform === "darwin"
@@ -1164,7 +1164,7 @@ async function withImageTemp<T>(fn: (workspace: {
   write(name: string, buffer: Buffer): Promise<string>;
   read(name: string): Promise<Buffer>;
 }) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-prism-"));
+  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-rastermill-"));
   try {
     return await fn({
       path: (name) => path.join(dir, name),
@@ -1183,7 +1183,7 @@ async function withImageTemp<T>(fn: (workspace: {
 async function runTool(
   command: string,
   args: string[],
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<void> {
   await execFileAsync(command, args, {
     timeout: options.timeoutMs,
@@ -1208,7 +1208,7 @@ function firstImageScene(
 async function runConvertTool(
   tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
   args: string[],
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<void> {
   await runTool(tool.command, convertToolArgs(tool, args), options);
 }
@@ -1250,7 +1250,7 @@ function sipsOrientationArgs(orientation: number): string[] {
 async function sipsApplyOrientation(
   tool: Extract<ExternalImageTool, { flavor: "sips" }>,
   buffer: Buffer,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<Buffer> {
   const orientation = readJpegExifOrientation(buffer);
   const args = orientation ? sipsOrientationArgs(orientation) : [];
@@ -1348,7 +1348,7 @@ async function windowsNativeResize(
   buffer: Buffer,
   resizeOptions: ResizeToJpegOptions | ResizeToPngOptions,
   format: "jpeg" | "png",
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<Buffer> {
   return await withImageTemp(async (workspace) => {
     const scriptPath = await workspace.write(
@@ -1384,7 +1384,7 @@ async function externalToJpeg(
   backend: Exclude<ImageBackend, "photon">,
   buffer: Buffer,
   resizeOptions: ResizeToJpegOptions,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<Buffer> {
   const tool = await resolveExternalTool(backend, options);
   if (!tool) {
@@ -1469,7 +1469,7 @@ async function externalToPng(
   backend: Exclude<ImageBackend, "photon" | "sips" | "ffmpeg">,
   buffer: Buffer,
   resizeOptions: ResizeToPngOptions,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<Buffer> {
   const tool = await resolveExternalTool(backend, options);
   if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips") {
@@ -1502,7 +1502,7 @@ async function externalToPng(
 async function externalConvertToJpeg(
   backend: Exclude<ImageBackend, "photon">,
   buffer: Buffer,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<Buffer> {
   const tool = await resolveExternalTool(backend, options);
   if (!tool) {
@@ -1536,7 +1536,7 @@ async function externalConvertToJpeg(
 async function externalHasAlpha(
   backend: Exclude<ImageBackend, "photon">,
   buffer: Buffer,
-  options: Required<PrismOptions>,
+  options: Required<RastermillOptions>,
 ): Promise<boolean> {
   const tool = await resolveExternalTool(backend, options);
   if (!tool || tool.flavor === "sips" || tool.flavor === "ffmpeg" || tool.flavor === "powershell") {
@@ -1594,8 +1594,8 @@ function parseImageMagickChannelsAlpha(value: string): boolean {
   );
 }
 
-function createProcessor(options: Required<PrismOptions>): Prism {
-  const prism: Prism = {
+function createProcessor(options: Required<RastermillOptions>): Rastermill {
+  const rastermill: Rastermill = {
     async metadata(input) {
       const buffer = toBuffer(input);
       const header = readImageMetadataFromHeader(buffer);
@@ -1705,7 +1705,7 @@ function createProcessor(options: Required<PrismOptions>): Prism {
       for (const side of sides) {
         for (const compressionLevel of compressionLevels) {
           try {
-            const out = await prism.toPng(buffer, {
+            const out = await rastermill.toPng(buffer, {
               maxSide: side,
               compressionLevel,
               withoutEnlargement: true,
@@ -1773,42 +1773,42 @@ function createProcessor(options: Required<PrismOptions>): Prism {
       });
     },
   };
-  return prism;
+  return rastermill;
 }
 
-export function createPrism(options: PrismOptions = {}): Prism {
+export function createRastermill(options: RastermillOptions = {}): Rastermill {
   return createProcessor(normalizeOptions(options));
 }
 
-const defaultPrism = createPrism();
+const defaultRastermill = createRastermill();
 
 export async function metadata(input: ImageInput): Promise<ImageMetadata | null> {
-  return await defaultPrism.metadata(input);
+  return await defaultRastermill.metadata(input);
 }
 
 export async function normalize(input: ImageInput): Promise<Buffer> {
-  return await defaultPrism.normalize(input);
+  return await defaultRastermill.normalize(input);
 }
 
 export async function toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer> {
-  return await defaultPrism.toJpeg(input, options);
+  return await defaultRastermill.toJpeg(input, options);
 }
 
 export async function toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer> {
-  return await defaultPrism.toPng(input, options);
+  return await defaultRastermill.toPng(input, options);
 }
 
 export async function optimizePng(
   input: ImageInput,
   options: OptimizePngOptions,
 ): Promise<OptimizedPng> {
-  return await defaultPrism.optimizePng(input, options);
+  return await defaultRastermill.optimizePng(input, options);
 }
 
 export async function convertHeicToJpeg(input: ImageInput): Promise<Buffer> {
-  return await defaultPrism.convertHeicToJpeg(input);
+  return await defaultRastermill.convertHeicToJpeg(input);
 }
 
 export async function hasAlpha(input: ImageInput): Promise<boolean> {
-  return await defaultPrism.hasAlpha(input);
+  return await defaultRastermill.hasAlpha(input);
 }

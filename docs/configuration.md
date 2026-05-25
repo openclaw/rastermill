@@ -1,12 +1,12 @@
 # Configuration
 
-Create a configured processor with `createPrism`, or use the exported module
+Create a configured processor with `createRastermill`, or use the exported module
 functions that share a single default-configured instance.
 
 ```ts
-import { createPrism } from "@openclaw/prism";
+import { createRastermill } from "@openclaw/rastermill";
 
-const prism = createPrism({
+const rastermill = createRastermill({
   backend: "auto",
   maxInputPixels: 25_000_000,
   maxOutputPixels: 25_000_000,
@@ -15,14 +15,14 @@ const prism = createPrism({
 });
 ```
 
-`createPrism(options?)` returns a `Prism` with `metadata`, `normalize`,
+`createRastermill(options?)` returns a `Rastermill` with `metadata`, `normalize`,
 `toJpeg`, `toPng`, `optimizePng`, `convertHeicToJpeg`, and `hasAlpha`.
 
 ## Options
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `backend` | `ImageBackendPreference` | `"auto"` (or env) | Force a backend or let Prism pick. See [Backends](./backends.md). |
+| `backend` | `ImageBackendPreference` | `"auto"` (or env) | Force a backend or let Rastermill pick. See [Backends](./backends.md). |
 | `maxInputPixels` | `number` | `25_000_000` | Reject decoding any image whose `width × height` exceeds this. |
 | `maxOutputPixels` | `number` | falls back to `maxInputPixels`, else `25_000_000` | Reject resize targets larger than this. |
 | `timeoutMs` | `number` | `20_000` | Per-invocation timeout for external tools. |
@@ -30,12 +30,12 @@ const prism = createPrism({
 | `envBackendVariable` | `string` | `"PRISM_IMAGE_BACKEND"` | Name of the env var read for the backend preference. |
 | `commandResolver` | `ImageCommandResolver` | PATH lookup | Resolve an external command name to an absolute path (or `null` if absent). |
 
-All numeric options must be positive safe integers; otherwise `createPrism`
+All numeric options must be positive safe integers; otherwise `createRastermill`
 throws.
 
 ## Pixel budgets
 
-Prism never trusts an image it cannot measure. Before any decode it reads the
+Rastermill never trusts an image it cannot measure. Before any decode it reads the
 header dimensions and checks them against `maxInputPixels`; an image with
 unknown dimensions or one over the limit is refused. For resize operations it
 also projects the output dimensions and checks them against `maxOutputPixels`.
@@ -44,13 +44,13 @@ This guards against decompression bombs: a small file claiming enormous
 dimensions is rejected before a decoder allocates memory for it.
 
 ```ts
-const prism = createPrism({ maxInputPixels: 4_000_000 });
-await prism.toJpeg(hugeImage, { maxSide: 1024 }); // throws if input > 4 MP
+const rastermill = createRastermill({ maxInputPixels: 4_000_000 });
+await rastermill.toJpeg(hugeImage, { maxSide: 1024 }); // throws if input > 4 MP
 ```
 
 ## Backend preference from the environment
 
-When `backend` is not passed, Prism reads the preference from the environment.
+When `backend` is not passed, Rastermill reads the preference from the environment.
 It checks `envBackendVariable` (default `PRISM_IMAGE_BACKEND`) first, then
 `OPENCLAW_IMAGE_BACKEND`. Values are case-insensitive and a few aliases are
 accepted:
@@ -72,18 +72,18 @@ name (e.g. `"magick"`) and returns an absolute path, or `null` when the tool is
 unavailable. The default resolver walks `PATH` (honoring `PATHEXT` on Windows).
 
 ```ts
-const prism = createPrism({
+const rastermill = createRastermill({
   commandResolver: (cmd) => (cmd === "magick" ? "/opt/im/bin/magick" : null),
 });
 ```
 
 ## Module functions
 
-For one-off calls you can skip `createPrism` and import the functions directly.
-They use a default `Prism` instance (`backend: "auto"`, 25 MP budgets):
+For one-off calls you can skip `createRastermill` and import the functions directly.
+They use a default `Rastermill` instance (`backend: "auto"`, 25 MP budgets):
 
 ```ts
-import { metadata, toJpeg } from "@openclaw/prism";
+import { metadata, toJpeg } from "@openclaw/rastermill";
 
 const info = await metadata(buf);
 const jpeg = await toJpeg(buf, { maxSide: 1600 });

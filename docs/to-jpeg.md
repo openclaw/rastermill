@@ -7,7 +7,7 @@ toJpeg(input: ImageInput, options: ResizeToJpegOptions): Promise<Buffer>
 ```
 
 ```ts
-const jpeg = await prism.toJpeg(buffer, {
+const jpeg = await rastermill.toJpeg(buffer, {
   maxSide: 1600,
   quality: 85,
 });
@@ -34,6 +34,6 @@ const jpeg = await prism.toJpeg(buffer, {
 
 ## Backend notes
 
-Under `backend: "auto"` Prism prefers Photon, then native tools per platform
+Under `backend: "auto"` Rastermill prefers Photon, then native tools per platform
 (see [Backends](./backends.md)). The `quality` value maps onto each backend's
 encoder — including a translation to ffmpeg's `-q:v` scale when ffmpeg is used.

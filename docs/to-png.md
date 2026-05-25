@@ -8,7 +8,7 @@ toPng(input: ImageInput, options: ResizeToPngOptions): Promise<Buffer>
 ```
 
 ```ts
-const png = await prism.toPng(buffer, {
+const png = await rastermill.toPng(buffer, {
   maxSide: 1024,
   compressionLevel: 8,
 });
@@ -39,11 +39,11 @@ PNG resize uses `photon`, `windows-native`, `imagemagick`, or `graphicsmagick`.
 
 ## Encoding raw pixels: `encodePngRgba`
 
-The low-level encoder Prism uses internally is exported. Given a tightly packed
+The low-level encoder Rastermill uses internally is exported. Given a tightly packed
 RGBA buffer it produces a valid PNG (`Buffer`):
 
 ```ts
-import { encodePngRgba } from "@openclaw/prism";
+import { encodePngRgba } from "@openclaw/rastermill";
 
 const png = encodePngRgba(rgbaPixels, width, height, /* compressionLevel */ 6);
 ```

@@ -1,6 +1,6 @@
 # Backends
 
-Prism can run an operation through several backends. With `backend: "auto"`
+Rastermill can run an operation through several backends. With `backend: "auto"`
 (the default) it tries them in a sensible order for the current platform and
 operation, falling back to the next when one is unavailable. You can also pin a
 single backend.
@@ -40,25 +40,25 @@ tools fill the gaps.
 
 ## How fallback works
 
-For each candidate backend, Prism runs the operation. If it throws an error that
+For each candidate backend, Rastermill runs the operation. If it throws an error that
 indicates the backend is simply *unavailable* — a missing executable, a missing
 Photon package, an unsupported/undecodable format, a missing codec delegate —
-Prism records the error and tries the next backend. Any other error (for
+Rastermill records the error and tries the next backend. Any other error (for
 example, a malformed image that a present backend rejects) is thrown
 immediately.
 
-If every candidate is unavailable, Prism throws a
-[`PrismUnavailableError`](./error-handling.md) listing the backends it tried and
+If every candidate is unavailable, Rastermill throws a
+[`RastermillUnavailableError`](./error-handling.md) listing the backends it tried and
 the collected causes.
 
 ## Forcing a backend
 
-Pass `backend` to `createPrism` (or set the env var — see
+Pass `backend` to `createRastermill` (or set the env var — see
 [Configuration](./configuration.md)) to pin one:
 
 ```ts
-const prism = createPrism({ backend: "imagemagick" });
+const rastermill = createRastermill({ backend: "imagemagick" });
 ```
 
-When pinned, Prism uses only that backend and does not fall back. If it's
-unavailable for the operation, you get a `PrismUnavailableError`.
+When pinned, Rastermill uses only that backend and does not fall back. If it's
+unavailable for the operation, you get a `RastermillUnavailableError`.

@@ -10,7 +10,7 @@ metadata(input: ImageInput): Promise<ImageMetadata | null>
 dimensions can't be determined or the image exceeds `maxInputPixels`.
 
 ```ts
-const info = await prism.metadata(buffer);
+const info = await rastermill.metadata(buffer);
 if (info) {
   console.log(`${info.width}×${info.height}`);
 }
@@ -18,7 +18,7 @@ if (info) {
 
 ## How it works
 
-Prism first parses the file header — no decoder runs. Header parsing covers:
+Rastermill first parses the file header — no decoder runs. Header parsing covers:
 
 - PNG
 - GIF (`GIF87a` / `GIF89a`)
@@ -31,7 +31,7 @@ Prism first parses the file header — no decoder runs. Header parsing covers:
 If the header yields dimensions, they're checked against `maxInputPixels`. Over
 budget returns `null` rather than throwing.
 
-If the header can't be parsed and the backend is `auto` or `photon`, Prism
+If the header can't be parsed and the backend is `auto` or `photon`, Rastermill
 decodes with Photon as a last resort and reports the decoded dimensions. With
 any other pinned backend, an unparseable header returns `null`. Decode failures
 also return `null`.
@@ -42,11 +42,11 @@ also return `null`.
 with no pixel-budget check and no decode fallback. It's synchronous.
 
 ```ts
-import { readImageMetadataFromHeader } from "@openclaw/prism";
+import { readImageMetadataFromHeader } from "@openclaw/rastermill";
 
 const dims = readImageMetadataFromHeader(buffer); // ImageMetadata | null
 ```
 
 This is the primitive `metadata` builds on. Use it when you only trust headers,
 want zero async work, or are sizing images before deciding whether to hand them
-to Prism at all.
+to Rastermill at all.

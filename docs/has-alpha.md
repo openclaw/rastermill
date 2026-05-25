@@ -7,7 +7,7 @@ hasAlpha(input: ImageInput): Promise<boolean>
 ```
 
 ```ts
-if (await prism.hasAlpha(buffer)) {
+if (await rastermill.hasAlpha(buffer)) {
   // keep PNG; converting to JPEG would flatten transparency
 }
 ```
@@ -16,14 +16,14 @@ if (await prism.hasAlpha(buffer)) {
 
 The input is validated against `maxInputPixels` first.
 
-For **PNG** there is a fast header-only path — Prism reads the color type and
+For **PNG** there is a fast header-only path — Rastermill reads the color type and
 `tRNS` chunk without decoding pixels:
 
 - color type 4 (gray+alpha) or 6 (RGBA) → `true`
 - a `tRNS` chunk with data → `true`
 - otherwise → `false`
 
-For other formats Prism uses a backend:
+For other formats Rastermill uses a backend:
 
 - `photon`: decodes and scans the alpha bytes; returns `true` as soon as any
   pixel's alpha is below 255.
@@ -35,7 +35,7 @@ this operation.
 
 ## Failure
 
-If no backend can determine alpha, Prism throws a
-[`PrismUnavailableError`](./error-handling.md) for the `hasAlpha` operation. On
+If no backend can determine alpha, Rastermill throws a
+[`RastermillUnavailableError`](./error-handling.md) for the `hasAlpha` operation. On
 systems without Photon, install ImageMagick or GraphicsMagick to inspect alpha
 for non-PNG formats.

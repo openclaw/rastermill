@@ -8,7 +8,7 @@ optimizePng(input: ImageInput, options: OptimizePngOptions): Promise<OptimizedPn
 ```
 
 ```ts
-const result = await prism.optimizePng(buffer, {
+const result = await rastermill.optimizePng(buffer, {
   maxBytes: 500_000,
 });
 
@@ -36,7 +36,7 @@ console.log(result.optimizedSize, result.resizeSide, result.compressionLevel);
 
 ## Behavior
 
-Prism walks every `side × compressionLevel` combination in order. Each candidate
+Rastermill walks every `side × compressionLevel` combination in order. Each candidate
 is produced via [`toPng`](./to-png.md) with `withoutEnlargement: true`, so the
 image is never upscaled.
 

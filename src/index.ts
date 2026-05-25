@@ -1053,6 +1053,11 @@ function isBackendUnavailable(error: unknown): boolean {
     detail.includes("not available") ||
     detail.includes("command not found") ||
     detail.includes("enoent") ||
+    detail.includes("photon did not expose") ||
+    detail.includes("cannot find package '@silvia-odwyer/photon-node'") ||
+    detail.includes('cannot find package "@silvia-odwyer/photon-node"') ||
+    detail.includes("cannot find module '@silvia-odwyer/photon-node'") ||
+    detail.includes('cannot find module "@silvia-odwyer/photon-node"') ||
     detail.includes("no images defined") ||
     detail.includes("support for this compression format has not been built in") ||
     detail.includes("unsupported image format")
@@ -1221,6 +1226,45 @@ function buildFfmpegResizeFilter(maxSide: number, withoutEnlargement?: boolean):
   return `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`;
 }
 
+function sipsOrientationArgs(orientation: number): string[] {
+  switch (orientation) {
+    case 2:
+      return ["-f", "horizontal"];
+    case 3:
+      return ["-r", "180"];
+    case 4:
+      return ["-f", "vertical"];
+    case 5:
+      return ["-r", "270", "-f", "horizontal"];
+    case 6:
+      return ["-r", "90"];
+    case 7:
+      return ["-r", "90", "-f", "horizontal"];
+    case 8:
+      return ["-r", "270"];
+    default:
+      return [];
+  }
+}
+
+async function sipsApplyOrientation(
+  tool: Extract<ExternalImageTool, { flavor: "sips" }>,
+  buffer: Buffer,
+  options: Required<PrismOptions>,
+): Promise<Buffer> {
+  const orientation = readJpegExifOrientation(buffer);
+  const args = orientation ? sipsOrientationArgs(orientation) : [];
+  if (args.length === 0) {
+    return buffer;
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.jpg", buffer);
+    const output = workspace.path("out.jpg");
+    await runTool(tool.command, [...args, input, "--out", output], options);
+    return await workspace.read("out.jpg");
+  });
+}
+
 const WINDOWS_NATIVE_RESIZE_SCRIPT = `
 param(
   [string]$InputPath,
@@ -1348,7 +1392,8 @@ async function externalToJpeg(
   }
   if (tool.flavor === "sips") {
     return await withImageTemp(async (workspace) => {
-      const input = await workspace.write("in.img", buffer);
+      const oriented = await sipsApplyOrientation(tool, buffer, options);
+      const input = await workspace.write("in.img", oriented);
       const output = workspace.path("out.jpg");
       const resizeArgs =
         resizeOptions.withoutEnlargement === false
@@ -1464,7 +1509,8 @@ async function externalConvertToJpeg(
     throw new Error(`Image backend ${backend} is not available`);
   }
   return await withImageTemp(async (workspace) => {
-    const input = await workspace.write("in.img", buffer);
+    const oriented = tool.flavor === "sips" ? await sipsApplyOrientation(tool, buffer, options) : buffer;
+    const input = await workspace.write("in.img", oriented);
     const output = workspace.path("out.jpg");
     if (tool.flavor === "sips") {
       await runTool(tool.command, ["-s", "format", "jpeg", input, "--out", output], options);

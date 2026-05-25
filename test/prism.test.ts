@@ -146,4 +146,20 @@ describe("Prism", () => {
       PrismUnavailableError,
     );
   });
+
+  it("resolves native fallback commands through the injected resolver", async () => {
+    const requested: string[] = [];
+    const prism = createPrism({
+      backend: "imagemagick",
+      commandResolver: (command) => {
+        requested.push(command);
+        return null;
+      },
+    });
+
+    await expect(prism.toJpeg(rgbaImage(4, 4), { maxSide: 4 })).rejects.toBeInstanceOf(
+      PrismUnavailableError,
+    );
+    expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
+  });
 });

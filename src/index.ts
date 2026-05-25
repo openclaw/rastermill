@@ -20,11 +20,13 @@ export type ImageMetadata = {
 export type ImageBackend =
   | "photon"
   | "sips"
+  | "windows-native"
   | "imagemagick"
   | "graphicsmagick"
   | "ffmpeg";
 
 export type ImageBackendPreference = ImageBackend | "auto";
+export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
 
 export type PrismOptions = {
   backend?: ImageBackendPreference;
@@ -33,6 +35,7 @@ export type PrismOptions = {
   timeoutMs?: number;
   maxProcessBufferBytes?: number;
   envBackendVariable?: string;
+  commandResolver?: ImageCommandResolver;
 };
 
 export type ResizeToJpegOptions = {
@@ -81,6 +84,7 @@ type ImageOperation =
 
 type ExternalImageTool =
   | { backend: "sips"; flavor: "sips"; command: string }
+  | { backend: "windows-native"; flavor: "powershell"; command: string }
   | { backend: "imagemagick"; flavor: "magick" | "convert"; command: string }
   | { backend: "graphicsmagick"; flavor: "gm"; command: string }
   | { backend: "ffmpeg"; flavor: "ffmpeg"; command: string };
@@ -182,6 +186,7 @@ function normalizeOptions(options: PrismOptions): Required<PrismOptions> {
       "maxProcessBufferBytes",
     ),
     envBackendVariable: options.envBackendVariable ?? "PRISM_IMAGE_BACKEND",
+    commandResolver: options.commandResolver ?? resolveExecutableFromPath,
   };
 }
 
@@ -195,10 +200,16 @@ function normalizeBackendPreference(value: string | undefined): ImageBackendPref
   switch (normalized) {
     case "photon":
     case "sips":
+    case "windows-native":
     case "imagemagick":
     case "graphicsmagick":
     case "ffmpeg":
       return normalized;
+    case "windows":
+    case "powershell":
+    case "system.drawing":
+    case "systemdrawing":
+      return "windows-native";
     case "magick":
     case "convert":
       return "imagemagick";
@@ -1016,11 +1027,15 @@ function backendsForOperation(
       : ["imagemagick", "graphicsmagick", "ffmpeg"];
   }
   if (operation === "toPng") {
-    return ["photon", "imagemagick", "graphicsmagick"];
+    return process.platform === "win32"
+      ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
+      : ["photon", "imagemagick", "graphicsmagick"];
   }
   return process.platform === "darwin"
     ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
-    : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+    : process.platform === "win32"
+      ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
+      : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
 }
 
 function isBackendUnavailable(error: unknown): boolean {
@@ -1084,7 +1099,7 @@ function pathCandidates(command: string): string[] {
   return paths.flatMap((dir) => extensions.map((ext) => path.join(dir, `${command}${ext}`)));
 }
 
-async function resolveExecutable(command: string): Promise<string | null> {
+async function resolveExecutableFromPath(command: string): Promise<string | null> {
   for (const candidate of pathCandidates(command)) {
     try {
       await access(candidate);
@@ -1096,19 +1111,35 @@ async function resolveExecutable(command: string): Promise<string | null> {
   return null;
 }
 
-async function resolveExternalTool(backend: Exclude<ImageBackend, "photon">): Promise<ExternalImageTool | null> {
+async function resolveExecutable(
+  command: string,
+  options: Required<PrismOptions>,
+): Promise<string | null> {
+  return await options.commandResolver(command);
+}
+
+async function resolveExternalTool(
+  backend: Exclude<ImageBackend, "photon">,
+  options: Required<PrismOptions>,
+): Promise<ExternalImageTool | null> {
   if (backend === "sips") {
     return process.platform === "darwin"
       ? { backend, flavor: "sips", command: "/usr/bin/sips" }
       : null;
   }
+  if (backend === "windows-native") {
+    const powershell = await resolveExecutable("powershell", options);
+    return powershell && process.platform === "win32"
+      ? { backend, flavor: "powershell", command: powershell }
+      : null;
+  }
   if (backend === "imagemagick") {
-    const magick = await resolveExecutable("magick");
+    const magick = await resolveExecutable("magick", options);
     if (magick) {
       return { backend, flavor: "magick", command: magick };
     }
     if (process.platform !== "win32") {
-      const convert = await resolveExecutable("convert");
+      const convert = await resolveExecutable("convert", options);
       if (convert) {
         return { backend, flavor: "convert", command: convert };
       }
@@ -1116,10 +1147,10 @@ async function resolveExternalTool(backend: Exclude<ImageBackend, "photon">): Pr
     return null;
   }
   if (backend === "graphicsmagick") {
-    const gm = await resolveExecutable("gm");
+    const gm = await resolveExecutable("gm", options);
     return gm ? { backend, flavor: "gm", command: gm } : null;
   }
-  const ffmpeg = await resolveExecutable("ffmpeg");
+  const ffmpeg = await resolveExecutable("ffmpeg", options);
   return ffmpeg ? { backend, flavor: "ffmpeg", command: ffmpeg } : null;
 }
 
@@ -1190,13 +1221,128 @@ function buildFfmpegResizeFilter(maxSide: number, withoutEnlargement?: boolean):
   return `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`;
 }
 
+const WINDOWS_NATIVE_RESIZE_SCRIPT = `
+param(
+  [string]$InputPath,
+  [string]$OutputPath,
+  [int]$MaxSide,
+  [int]$Quality,
+  [int]$WithoutEnlargement,
+  [string]$Format
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$source = [System.Drawing.Image]::FromFile($InputPath)
+$bitmap = $null
+$graphics = $null
+try {
+  try {
+    if ($source.PropertyIdList -contains 274) {
+      $orientation = [BitConverter]::ToUInt16($source.GetPropertyItem(274).Value, 0)
+      switch ($orientation) {
+        2 { $source.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX) }
+        3 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }
+        4 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipX) }
+        5 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipX) }
+        6 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }
+        7 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipX) }
+        8 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }
+      }
+      try { $source.RemovePropertyItem(274) } catch {}
+    }
+  } catch {}
+  $maxDim = [Math]::Max($source.Width, $source.Height)
+  if ($maxDim -le 0) { throw 'Invalid image dimensions' }
+  $scale = $MaxSide / [double]$maxDim
+  if ($WithoutEnlargement -eq 1) {
+    $scale = [Math]::Min(1.0, $scale)
+  }
+  $width = [Math]::Max(1, [int][Math]::Round($source.Width * $scale))
+  $height = [Math]::Max(1, [int][Math]::Round($source.Height * $scale))
+  $pixelFormat = [System.Drawing.Imaging.PixelFormat]::Format24bppRgb
+  if ($Format -eq 'png') {
+    $pixelFormat = [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+  }
+  $bitmap = New-Object System.Drawing.Bitmap($width, $height, $pixelFormat)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+  $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+  if ($Format -eq 'png') {
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+  } else {
+    $graphics.Clear([System.Drawing.Color]::White)
+  }
+  $graphics.DrawImage($source, 0, 0, $width, $height)
+  if ($Format -eq 'png') {
+    $bitmap.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  } else {
+    $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+      Where-Object { $_.MimeType -eq 'image/jpeg' } |
+      Select-Object -First 1
+    if ($null -eq $codec) { throw 'JPEG encoder not available' }
+    $encoder = [System.Drawing.Imaging.Encoder]::Quality
+    $encoderParam = New-Object System.Drawing.Imaging.EncoderParameter($encoder, [int64]$Quality)
+    $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+    try {
+      $encoderParams.Param[0] = $encoderParam
+      $bitmap.Save($OutputPath, $codec, $encoderParams)
+    } finally {
+      $encoderParam.Dispose()
+      $encoderParams.Dispose()
+    }
+  }
+} finally {
+  if ($null -ne $graphics) { $graphics.Dispose() }
+  if ($null -ne $bitmap) { $bitmap.Dispose() }
+  $source.Dispose()
+}
+`;
+
+async function windowsNativeResize(
+  tool: Extract<ExternalImageTool, { flavor: "powershell" }>,
+  buffer: Buffer,
+  resizeOptions: ResizeToJpegOptions | ResizeToPngOptions,
+  format: "jpeg" | "png",
+  options: Required<PrismOptions>,
+): Promise<Buffer> {
+  return await withImageTemp(async (workspace) => {
+    const scriptPath = await workspace.write(
+      "resize.ps1",
+      Buffer.from(WINDOWS_NATIVE_RESIZE_SCRIPT, "utf8"),
+    );
+    const input = await workspace.write("in.img", buffer);
+    const outputName = format === "png" ? "out.png" : "out.jpg";
+    const output = workspace.path(outputName);
+    await runTool(
+      tool.command,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        scriptPath,
+        input,
+        output,
+        String(clampInteger(resizeOptions.maxSide, 1, Number.MAX_SAFE_INTEGER)),
+        String(clampInteger("quality" in resizeOptions ? resizeOptions.quality ?? 90 : 90, 1, 100)),
+        resizeOptions.withoutEnlargement === false ? "0" : "1",
+        format,
+      ],
+      options,
+    );
+    return await workspace.read(outputName);
+  });
+}
+
 async function externalToJpeg(
   backend: Exclude<ImageBackend, "photon">,
   buffer: Buffer,
   resizeOptions: ResizeToJpegOptions,
   options: Required<PrismOptions>,
 ): Promise<Buffer> {
-  const tool = await resolveExternalTool(backend);
+  const tool = await resolveExternalTool(backend, options);
   if (!tool) {
     throw new Error(`Image backend ${backend} is not available`);
   }
@@ -1230,6 +1376,9 @@ async function externalToJpeg(
       );
       return await workspace.read("out.jpg");
     });
+  }
+  if (tool.flavor === "powershell") {
+    return await windowsNativeResize(tool, buffer, resizeOptions, "jpeg", options);
   }
   return await withImageTemp(async (workspace) => {
     const input = await workspace.write("in.img", buffer);
@@ -1277,9 +1426,12 @@ async function externalToPng(
   resizeOptions: ResizeToPngOptions,
   options: Required<PrismOptions>,
 ): Promise<Buffer> {
-  const tool = await resolveExternalTool(backend);
+  const tool = await resolveExternalTool(backend, options);
   if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips") {
     throw new Error(`Image backend ${backend} is not available for PNG resizing`);
+  }
+  if (tool.flavor === "powershell") {
+    return await windowsNativeResize(tool, buffer, resizeOptions, "png", options);
   }
   return await withImageTemp(async (workspace) => {
     const input = await workspace.write("in.img", buffer);
@@ -1307,7 +1459,7 @@ async function externalConvertToJpeg(
   buffer: Buffer,
   options: Required<PrismOptions>,
 ): Promise<Buffer> {
-  const tool = await resolveExternalTool(backend);
+  const tool = await resolveExternalTool(backend, options);
   if (!tool) {
     throw new Error(`Image backend ${backend} is not available`);
   }
@@ -1316,6 +1468,8 @@ async function externalConvertToJpeg(
     const output = workspace.path("out.jpg");
     if (tool.flavor === "sips") {
       await runTool(tool.command, ["-s", "format", "jpeg", input, "--out", output], options);
+    } else if (tool.flavor === "powershell") {
+      throw new Error("Windows native image backend does not convert HEIC to JPEG");
     } else if (tool.flavor === "ffmpeg") {
       await runTool(
         tool.command,
@@ -1338,14 +1492,14 @@ async function externalHasAlpha(
   buffer: Buffer,
   options: Required<PrismOptions>,
 ): Promise<boolean> {
-  const tool = await resolveExternalTool(backend);
-  if (!tool || tool.flavor === "sips" || tool.flavor === "ffmpeg") {
+  const tool = await resolveExternalTool(backend, options);
+  if (!tool || tool.flavor === "sips" || tool.flavor === "ffmpeg" || tool.flavor === "powershell") {
     throw new Error(`Image backend ${backend} is not available for alpha inspection`);
   }
   return await withImageTemp(async (workspace) => {
     const input = await workspace.write("in.img", buffer);
     const identifyCommand =
-      tool.flavor === "convert" ? await resolveExecutable("identify") : tool.command;
+      tool.flavor === "convert" ? await resolveExecutable("identify", options) : tool.command;
     if (!identifyCommand) {
       throw new Error("ImageMagick identify is not available for alpha inspection");
     }
@@ -1481,7 +1635,11 @@ function createProcessor(options: Required<PrismOptions>): Prism {
             resized.free();
           }
         }
-        if (backend === "imagemagick" || backend === "graphicsmagick") {
+        if (
+          backend === "windows-native" ||
+          backend === "imagemagick" ||
+          backend === "graphicsmagick"
+        ) {
           return await externalToPng(backend, buffer, resizeOptions, options);
         }
         throw new Error(`Image backend ${backend} is not available for PNG resizing`);

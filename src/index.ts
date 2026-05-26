@@ -27,6 +27,11 @@ export type ImageProbe = ImageMetadata & {
   bytes: number;
 };
 
+export type ImageTransparency = {
+  hasAlphaChannel: boolean;
+  hasTransparentPixels: boolean;
+};
+
 export type ImageBackend =
   | "photon"
   | "sips"
@@ -36,11 +41,13 @@ export type ImageBackend =
   | "ffmpeg";
 
 export type ImageBackendPreference = ImageBackend | "auto";
+export type ImageExecutionMode = "auto" | "internal" | "external";
 export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
 export type TempPrefixResolver = () => string;
 
 export type RastermillOptions = {
   backend?: ImageBackendPreference;
+  execution?: ImageExecutionMode;
   limits?: {
     inputPixels?: number;
     outputPixels?: number;
@@ -59,6 +66,7 @@ export type RastermillOptions = {
 
 type ResolvedOptions = {
   backend: ImageBackendPreference;
+  execution: ImageExecutionMode;
   maxInputPixels: number;
   maxOutputPixels: number;
   tempRootDir: string;
@@ -138,6 +146,7 @@ type NativeEncodeOptions = {
 
 export type Rastermill = {
   probe(input: ImageInput): Promise<ImageProbe | null>;
+  transparency(input: ImageInput): Promise<ImageTransparency>;
   encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
   encodeWithinBytes(
     input: ImageInput,
@@ -145,7 +154,7 @@ export type Rastermill = {
   ): Promise<EncodedImageWithinBytes>;
 };
 
-type ImageOperation = "encode";
+type ImageOperation = "encode" | "transparency";
 
 export type RastermillErrorCode =
   | "RASTERMILL_INPUT_TOO_LARGE"
@@ -283,6 +292,9 @@ function validateTempPrefix(value: string): string {
 
 function normalizeOptions(options: RastermillOptions): ResolvedOptions {
   const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
+  const backend = normalizeBackendPreference(options.backend ?? process.env[backendVar]);
+  const execution = normalizeExecutionMode(options.execution);
+  validateBackendExecution(backend, execution);
   const maxInputPixels = normalizePositiveInteger(
     options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
     "limits.inputPixels",
@@ -292,7 +304,8 @@ function normalizeOptions(options: RastermillOptions): ResolvedOptions {
     validateTempPrefix(tempPrefix);
   }
   return {
-    backend: normalizeBackendPreference(options.backend ?? process.env[backendVar]),
+    backend,
+    execution,
     maxInputPixels,
     maxOutputPixels: normalizePositiveInteger(
       options.limits?.outputPixels ?? maxInputPixels,
@@ -307,6 +320,57 @@ function normalizeOptions(options: RastermillOptions): ResolvedOptions {
     ),
     commandResolver: options.commandResolver ?? resolveExecutableFromPath,
   };
+}
+
+function normalizeExecutionMode(value: string | undefined): ImageExecutionMode {
+  const normalized = value?.trim().toLowerCase();
+  switch (normalized) {
+    case undefined:
+    case "":
+    case "auto":
+      return "auto";
+    case "internal":
+    case "in-process":
+    case "inprocess":
+      return "internal";
+    case "external":
+    case "native":
+      return "external";
+    default:
+      throw rastermillError(
+        "RASTERMILL_BAD_OPTION",
+        'execution must be "auto", "internal", or "external"',
+      );
+  }
+}
+
+function isInternalBackend(backend: ImageBackend): boolean {
+  return backend === "photon";
+}
+
+function allowsInternalBackend(options: Pick<ResolvedOptions, "backend" | "execution">): boolean {
+  return options.execution !== "external" && (options.backend === "auto" || options.backend === "photon");
+}
+
+function validateBackendExecution(
+  backend: ImageBackendPreference,
+  execution: ImageExecutionMode,
+): void {
+  if (backend === "auto" || execution === "auto") {
+    return;
+  }
+  if (execution === "internal" && !isInternalBackend(backend)) {
+    throw rastermillError(
+      "RASTERMILL_BAD_OPTION",
+      `backend ${backend} is external but execution is internal`,
+    );
+  }
+  if (execution === "external" && isInternalBackend(backend)) {
+    throw rastermillError(
+      "RASTERMILL_BAD_OPTION",
+      `backend ${backend} is internal but execution is external`,
+    );
+  }
 }
 
 function normalizeBackendPreference(value: string | undefined): ImageBackendPreference {
@@ -395,6 +459,17 @@ function readWebpAlphaChannel(buffer: Buffer): boolean | null {
   }
   if (buffer.toString("ascii", 12, 16) === "VP8X") {
     return (buffer[20] ?? 0) & 0x10 ? true : false;
+  }
+  if (buffer.toString("ascii", 12, 16) === "VP8L") {
+    if (buffer.length < 25 || buffer[20] !== 0x2f) {
+      return null;
+    }
+    const bits =
+      buffer.readUInt8(21) |
+      (buffer.readUInt8(22) << 8) |
+      (buffer.readUInt8(23) << 16) |
+      (buffer.readUInt8(24) << 24);
+    return (bits >>> 28) & 1 ? true : false;
   }
   return null;
 }
@@ -748,9 +823,9 @@ function hasPhotonDecodableHeader(buffer: Buffer): boolean {
   );
 }
 
-function assertPhotonDecodableHeader(buffer: Buffer): void {
+function assertPhotonDecodableHeader(buffer: Buffer, operation: ImageOperation): void {
   if (!hasPhotonDecodableHeader(buffer)) {
-    throw new RastermillUnavailableError("encode", "Photon cannot decode this image format");
+    throw new RastermillUnavailableError(operation, "Photon cannot decode this image format");
   }
 }
 
@@ -1078,9 +1153,10 @@ async function loadOrientedPhotonImage(
   buffer: Buffer,
   maxInputPixels: number,
   autoOrient = true,
+  operation: ImageOperation = "encode",
 ): Promise<{ photon: PhotonModule; image: PhotonImage }> {
   assertHeaderPixelBudget(buffer, maxInputPixels);
-  assertPhotonDecodableHeader(buffer);
+  assertPhotonDecodableHeader(buffer, operation);
   const photon = await loadPhoton();
   let decoded: PhotonImage;
   try {
@@ -1286,6 +1362,37 @@ function resizePhotonImage(
   return resized;
 }
 
+function scanRgbaTransparency(pixels: Uint8Array): boolean {
+  for (let offset = 3; offset < pixels.length; offset += 4) {
+    if ((pixels[offset] ?? 255) < 255) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function readPhotonTransparency(
+  buffer: Buffer,
+  header: ImageProbe,
+  maxInputPixels: number,
+): Promise<ImageTransparency> {
+  const { image } = await loadOrientedPhotonImage(
+    buffer,
+    maxInputPixels,
+    false,
+    "transparency",
+  );
+  try {
+    const hasTransparentPixels = scanRgbaTransparency(image.get_raw_pixels());
+    return {
+      hasAlphaChannel: header.hasAlpha === true || hasTransparentPixels,
+      hasTransparentPixels,
+    };
+  } finally {
+    image.free();
+  }
+}
+
 function crc32(buffer: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of buffer) {
@@ -1347,25 +1454,29 @@ export function encodePngRgba(
 function backendsForFormat(
   format: EncodedImageFormat,
   preference: ImageBackendPreference,
+  execution: ImageExecutionMode,
 ): ImageBackend[] {
-  if (preference !== "auto") {
-    return [preference];
+  const candidates: ImageBackend[] =
+    preference !== "auto"
+      ? [preference]
+      : format === "webp"
+        ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
+        : format === "png"
+          ? process.platform === "win32"
+            ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
+            : ["photon", "imagemagick", "graphicsmagick"]
+          : process.platform === "darwin"
+            ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
+            : process.platform === "win32"
+              ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
+              : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+  if (execution === "internal") {
+    return candidates.filter(isInternalBackend);
   }
-  if (format === "webp") {
-    return ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+  if (execution === "external") {
+    return candidates.filter((backend) => !isInternalBackend(backend));
   }
-  // PNG: only Photon and the magick tools encode it; sips/ffmpeg cannot.
-  if (format === "png") {
-    return process.platform === "win32"
-      ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
-      : ["photon", "imagemagick", "graphicsmagick"];
-  }
-  // JPEG, including HEIC/AVIF inputs that Photon rejects and that fall through to native.
-  return process.platform === "darwin"
-    ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
-    : process.platform === "win32"
-      ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
-      : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+  return candidates;
 }
 
 function isBackendUnavailable(error: unknown): boolean {
@@ -1407,7 +1518,7 @@ async function runWithBackends<T>(
   fn: (backend: ImageBackend) => Promise<T>,
 ): Promise<T> {
   const errors: unknown[] = [];
-  const backends = backendsForFormat(format, options.backend);
+  const backends = backendsForFormat(format, options.backend, options.execution);
   for (const backend of backends) {
     try {
       return await fn(backend);
@@ -2016,6 +2127,45 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       return null;
     },
 
+    async transparency(input) {
+      const buffer = toBuffer(input);
+      const header = readImageProbeFromHeader(buffer);
+      if (!header) {
+        throw rastermillError(
+          "RASTERMILL_UNDECODABLE",
+          "Unable to determine image dimensions; refusing to process",
+        );
+      }
+      validatePixelBudget(header, options.maxInputPixels);
+      if (header.hasAlpha === false) {
+        return {
+          hasAlphaChannel: false,
+          hasTransparentPixels: false,
+        };
+      }
+      if (!allowsInternalBackend(options)) {
+        throw new RastermillUnavailableError(
+          "transparency",
+          "Internal image processing is disabled for transparency inspection",
+        );
+      }
+      try {
+        return await readPhotonTransparency(buffer, header, options.maxInputPixels);
+      } catch (error) {
+        if (error instanceof RastermillUnavailableError) {
+          throw error;
+        }
+        if (isBackendUnavailable(error)) {
+          throw new RastermillUnavailableError(
+            "transparency",
+            "Image processor unavailable for transparency inspection; tried: photon",
+            [error],
+          );
+        }
+        throw error;
+      }
+    },
+
     async encode(input, encodeOptions) {
       const buffer = toBuffer(input);
       const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
@@ -2228,6 +2378,10 @@ function getDefaultRastermill(): Rastermill {
 
 export async function probe(input: ImageInput): Promise<ImageProbe | null> {
   return await getDefaultRastermill().probe(input);
+}
+
+export async function transparency(input: ImageInput): Promise<ImageTransparency> {
+  return await getDefaultRastermill().transparency(input);
 }
 
 export async function encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage> {

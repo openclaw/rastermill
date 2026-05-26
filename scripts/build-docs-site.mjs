@@ -13,7 +13,7 @@ const productDescription =
 
 const navSections = [
   ["Start", ["README.md", "configuration.md"]],
-  ["API", ["probe.md", "encode.md", "encode-within-bytes.md"]],
+  ["API", ["probe.md", "transparency.md", "encode.md", "encode-within-bytes.md"]],
   ["Runtime", ["backends.md", "error-handling.md"]],
 ];
 

@@ -41,7 +41,8 @@ look at this?" and `encode` for "process this."
 const info = await rastermill.probe(buffer);
 if (!info) return; // unknown format or over the input budget
 if (info.hasAlpha) {
-  // keep PNG; otherwise flatten to JPEG
+  const alpha = await rastermill.transparency(buffer);
+  // Use alpha.hasAlphaChannel or alpha.hasTransparentPixels for policy.
 }
 ```
 

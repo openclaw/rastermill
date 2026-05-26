@@ -23,6 +23,21 @@ function rgbaImage(width: number, height: number, alpha = 255): Buffer {
   return encodePngRgba(pixels, width, height);
 }
 
+function losslessWebpHeader(width: number, height: number, hasAlpha: boolean): Buffer {
+  const bits = (width - 1) | ((height - 1) << 14) | (hasAlpha ? 1 << 28 : 0);
+  const payload = Buffer.alloc(5);
+  payload[0] = 0x2f;
+  payload.writeUInt32LE(bits >>> 0, 1);
+  const buffer = Buffer.alloc(30);
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(buffer.length - 8, 4);
+  buffer.write("WEBP", 8, "ascii");
+  buffer.write("VP8L", 12, "ascii");
+  buffer.writeUInt32LE(payload.length, 16);
+  payload.copy(buffer, 20);
+  return buffer;
+}
+
 function tiffImageFileDirectories(
   pages: readonly { width: number; height: number }[],
   options?: { subIfd?: boolean },
@@ -73,6 +88,18 @@ describe("Rastermill", () => {
       hasAlpha: true,
       orientation: null,
       bytes: image.length,
+    });
+  });
+
+  it("reads lossless WebP alpha flags from headers", () => {
+    expect(readImageProbeFromHeader(losslessWebpHeader(3, 2, true))).toMatchObject({
+      format: "webp",
+      width: 3,
+      height: 2,
+      hasAlpha: true,
+    });
+    expect(readImageProbeFromHeader(losslessWebpHeader(3, 2, false))).toMatchObject({
+      hasAlpha: false,
     });
   });
 
@@ -130,6 +157,59 @@ describe("Rastermill", () => {
 
     expect(png).toMatchObject({ format: "png", width: 5, height: 3 });
     await expect(rastermill.probe(png.data)).resolves.toMatchObject({ hasAlpha: true });
+  });
+
+  it("reports alpha channels separately from transparent pixels", async () => {
+    const rastermill = createRastermill();
+
+    await expect(rastermill.transparency(rgbaImage(1, 1, 255))).resolves.toEqual({
+      hasAlphaChannel: true,
+      hasTransparentPixels: false,
+    });
+    await expect(rastermill.transparency(rgbaImage(1, 1, 64))).resolves.toEqual({
+      hasAlphaChannel: true,
+      hasTransparentPixels: true,
+    });
+  });
+
+  it("detects transparent GIF pixels through Photon", async () => {
+    const rastermill = createRastermill();
+    const transparentGif = Buffer.from(
+      "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+      "base64",
+    );
+
+    await expect(rastermill.transparency(transparentGif)).resolves.toEqual({
+      hasAlphaChannel: true,
+      hasTransparentPixels: true,
+    });
+  });
+
+  it("does not cross into internal processing for external transparency checks", async () => {
+    const rastermill = createRastermill({ execution: "external" });
+
+    await expect(rastermill.transparency(rgbaImage(1, 1, 64))).rejects.toMatchObject({
+      code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE",
+      operation: "transparency",
+    });
+  });
+
+  it("wraps Photon availability failures for transparency checks", async () => {
+    vi.resetModules();
+    vi.doMock("@silvia-odwyer/photon-node", () => {
+      throw new Error("Photon did not expose the required image processor API");
+    });
+    const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+      await import("../src/index.js");
+
+    await expect(
+      createFreshRastermill().transparency(
+        encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4),
+      ),
+    ).rejects.toMatchObject({
+      code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE",
+      operation: "transparency",
+    });
   });
 
   it("encodes under a byte budget by searching dimensions and compression", async () => {
@@ -205,6 +285,9 @@ describe("Rastermill", () => {
     await expect(
       rastermill.encode(rgbaImage(8, 8), { format: "png", resize: { maxSide: 0 } }),
     ).rejects.toMatchObject({ code: "RASTERMILL_BAD_OPTION" });
+    expect(() => createRastermill({ backend: "photon", execution: "external" })).toThrow(
+      /execution is external/,
+    );
   });
 
   it("passes exact fill dimensions through to native backends", async () => {
@@ -311,6 +394,48 @@ describe("Rastermill", () => {
     await expect(
       rastermill.encode(source, { format: "png", resize: { maxSide: 4 } }),
     ).rejects.toBeInstanceOf(RastermillUnavailableError);
+  });
+
+  it("keeps execution=internal inside the process boundary", async () => {
+    const requested: string[] = [];
+    const rastermill = createRastermill({
+      execution: "internal",
+      commandResolver: (command) => {
+        requested.push(command);
+        return command;
+      },
+    });
+
+    await expect(
+      rastermill.encode(tiffImageFileDirectories([{ width: 4, height: 4 }]), {
+        format: "jpeg",
+        resize: { maxSide: 4 },
+      }),
+    ).rejects.toBeInstanceOf(RastermillUnavailableError);
+    expect(requested).toEqual([]);
+  });
+
+  it("keeps execution=external from importing Photon", async () => {
+    vi.resetModules();
+    let photonImported = false;
+    vi.doMock("@silvia-odwyer/photon-node", () => {
+      photonImported = true;
+      throw new Error("Photon should not be imported for external execution");
+    });
+    const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+      await import("../src/index.js");
+    const rastermill = createFreshRastermill({
+      execution: "external",
+      commandResolver: () => null,
+    });
+
+    await expect(
+      rastermill.encode(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
+        format: "jpeg",
+        resize: { maxSide: 2 },
+      }),
+    ).rejects.toMatchObject({ code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE" });
+    expect(photonImported).toBe(false);
   });
 
   it("resolves native fallback commands through the injected resolver", async () => {

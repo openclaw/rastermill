@@ -85,7 +85,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link active" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link active" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
@@ -100,11 +100,12 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       </header>
       <div class="doc-grid">
         <article class="doc"><h1 id="backends">Backends</h1>
-<p>Rastermill can run an operation through several backends. With <code>backend: &quot;auto&quot;</code> (the default) it tries them in a sensible order for the current platform and operation, falling back to the next when one is unavailable. You can also pin a single backend.</p>
+<p>Rastermill can run either in-process, through native tools, or in automatic mode that uses both. <code>execution: &quot;auto&quot;</code> is the default: it uses Photon for common formats and falls through to external tools for codecs Photon does not support.</p>
+<p>Use <code>execution: &quot;internal&quot;</code> to forbid child processes. Use <code>execution: &quot;external&quot;</code> when you explicitly want native tool behavior. Advanced callers can still pin a single backend with <code>backend</code>.</p>
 <h2 id="available-backends"><a class="anchor" href="#available-backends" aria-label="Anchor link">#</a>Available backends</h2>
 <div class="table-wrap"><table><thead><tr><th>Backend</th><th>Engine</th><th>Notes</th></tr></thead><tbody><tr><td><code>photon</code></td><td>In-process WASM (<a href="https://github.com/silvia-odwyer/photon">Photon</a>)</td><td>Fast, no external process. Decodes PNG, JPEG, GIF, WebP. Encodes JPEG, PNG, WebP. Cannot decode HEIC/AVIF.</td></tr><tr><td><code>sips</code></td><td>macOS <code>/usr/bin/sips</code></td><td>macOS only. JPEG output (incl. HEIC/AVIF → JPEG); not used for PNG.</td></tr><tr><td><code>windows-native</code></td><td>Windows PowerShell + <code>System.Drawing</code></td><td>Windows only. JPEG and PNG; does not convert HEIC.</td></tr><tr><td><code>imagemagick</code></td><td><code>magick</code> (or <code>convert</code>)</td><td>Broad format support, including HEIC/AVIF where codecs are installed.</td></tr><tr><td><code>graphicsmagick</code></td><td><code>gm</code></td><td>Similar coverage to ImageMagick.</td></tr><tr><td><code>ffmpeg</code></td><td><code>ffmpeg</code></td><td>Used for JPEG/WebP output and HEIC→JPEG; not used for PNG.</td></tr></tbody></table></div>
 <h2 id="automatic-order"><a class="anchor" href="#automatic-order" aria-label="Anchor link">#</a>Automatic order</h2>
-<p>When <code>backend: &quot;auto&quot;</code>, the candidate list depends on the output format and the platform. Photon is tried first whenever it can handle the format, then native tools fill the gaps.</p>
+<p>When <code>execution: &quot;auto&quot;</code> and <code>backend: &quot;auto&quot;</code>, the candidate list depends on the output format and the platform. Photon is tried first whenever it can handle the format, then native tools fill the gaps.</p>
 <p><code>encode</code> to JPEG (this also covers HEIC/AVIF → JPEG, where Photon fails to decode and falls through to native):</p>
 <ul>
 <li>macOS: <code>photon → sips → imagemagick → graphicsmagick → ffmpeg</code></li>
@@ -123,11 +124,16 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <h2 id="how-fallback-works"><a class="anchor" href="#how-fallback-works" aria-label="Anchor link">#</a>How fallback works</h2>
 <p>For each candidate backend, Rastermill runs the operation. If it throws an error that indicates the backend is simply <em>unavailable</em> — a missing executable, a missing Photon package, an unsupported/undecodable format, a missing codec delegate — Rastermill records the error and tries the next backend. Any other error (for example, a malformed image that a present backend rejects) is thrown immediately.</p>
 <p>If every candidate is unavailable, Rastermill throws a <a href="error-handling.html"><code>RastermillUnavailableError</code></a> listing the backends it tried and the collected causes.</p>
+<h2 id="execution-modes"><a class="anchor" href="#execution-modes" aria-label="Anchor link">#</a>Execution modes</h2>
+<pre><code class="language-ts">createRastermill({ execution: <span class="hl-s">&quot;auto&quot;</span> });     <span class="hl-c">// Photon first, native tools as needed</span>
+createRastermill({ execution: <span class="hl-s">&quot;internal&quot;</span> }); <span class="hl-c">// no child processes</span>
+createRastermill({ execution: <span class="hl-s">&quot;external&quot;</span> }); <span class="hl-c">// native tools only</span></code></pre>
+<p><code>execution: &quot;internal&quot;</code> currently supports PNG, JPEG, GIF, and WebP input through Photon. It cannot decode HEIC/AVIF, so those operations fail with <code>RastermillUnavailableError</code> instead of spawning <code>sips</code>, ImageMagick, or ffmpeg.</p>
 <h2 id="forcing-a-backend"><a class="anchor" href="#forcing-a-backend" aria-label="Anchor link">#</a>Forcing a backend</h2>
 <p>Pass <code>backend</code> to <code>createRastermill</code> (or set the env var — see <a href="configuration.html">Configuration</a>) to pin one:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> rastermill = createRastermill({ backend: <span class="hl-s">&quot;imagemagick&quot;</span> });</code></pre>
 <p>When pinned, Rastermill uses only that backend and does not fall back. If it&#39;s unavailable for the operation, you get a <code>RastermillUnavailableError</code>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="encode-within-bytes.html"><small>Previous</small><span>encodeWithinBytes</span></a><a class="page-nav-next" href="error-handling.html"><small>Next</small><span>Error handling</span></a></nav></article>
-        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#available-backends">Available backends</a><a class="toc-l2" href="#automatic-order">Automatic order</a><a class="toc-l2" href="#how-fallback-works">How fallback works</a><a class="toc-l2" href="#forcing-a-backend">Forcing a backend</a></nav>
+        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#available-backends">Available backends</a><a class="toc-l2" href="#automatic-order">Automatic order</a><a class="toc-l2" href="#how-fallback-works">How fallback works</a><a class="toc-l2" href="#execution-modes">Execution modes</a><a class="toc-l2" href="#forcing-a-backend">Forcing a backend</a></nav>
       </div>
     </main>
   </div>

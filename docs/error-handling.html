@@ -85,7 +85,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link active" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link active" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
@@ -120,12 +120,12 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <p>Thrown when every candidate backend for an operation is unavailable — missing executables, a missing Photon package, unsupported formats, or absent codecs.</p>
 <pre><code class="language-ts"><span class="hl-k">class</span> RastermillUnavailableError <span class="hl-k">extends</span> RastermillError {
   readonly code: <span class="hl-s">&quot;RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE&quot;</span>;
-  readonly operation: <span class="hl-s">&quot;encode&quot;</span>;
+  readonly operation: <span class="hl-s">&quot;encode&quot;</span> | <span class="hl-s">&quot;transparency&quot;</span>;
   readonly causes: unknown[]; <span class="hl-c">// the per-backend errors collected</span>
 }</code></pre>
 <ul>
 <li><code>code</code> is the stable string <code>&quot;RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE&quot;</code>.</li>
-<li><code>operation</code> is always <code>&quot;encode&quot;</code> (the single operation that runs backends).</li>
+<li><code>operation</code> is <code>&quot;encode&quot;</code> or <code>&quot;transparency&quot;</code>.</li>
 <li><code>causes</code> holds the error thrown by each attempted backend, in order. The standard <code>Error.cause</code> is set to the first <code>Error</code> among them.</li>
 <li><code>message</code> lists the backends Rastermill tried.</li>
 </ul>

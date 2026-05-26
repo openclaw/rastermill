@@ -6,6 +6,7 @@ Canonical documentation:
 - Overview: https://rastermill.com/
 - Configuration: https://rastermill.com/configuration.html
 - probe: https://rastermill.com/probe.html
+- transparency: https://rastermill.com/transparency.html
 - encode: https://rastermill.com/encode.html
 - encodeWithinBytes: https://rastermill.com/encode-within-bytes.html
 - Backends: https://rastermill.com/backends.html

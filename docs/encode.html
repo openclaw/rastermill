@@ -85,7 +85,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link active" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link active" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
@@ -153,7 +153,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <h2 id="orientation"><a class="anchor" href="#orientation" aria-label="Anchor link">#</a>Orientation</h2>
 <p>JPEG EXIF orientation is applied by default so the output pixels are upright. Pass <code>autoOrient: false</code> to keep the original pixel layout. HEIC/AVIF orientation is delegated to the native backend and may vary by tool.</p>
 <h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel budgets</h2>
-<p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="probe.html"><small>Previous</small><span>probe</span></a><a class="page-nav-next" href="encode-within-bytes.html"><small>Next</small><span>encodeWithinBytes</span></a></nav></article>
+<p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="encode-within-bytes.html"><small>Next</small><span>encodeWithinBytes</span></a></nav></article>
         <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>
       </div>
     </main>

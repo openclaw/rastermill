@@ -85,7 +85,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link active" href="probe.html">probe</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link active" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
@@ -122,10 +122,11 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <pre><code class="language-ts"><span class="hl-k">const</span> info = <span class="hl-k">await</span> rastermill.probe(buffer);
 <span class="hl-k">if</span> (!info) <span class="hl-k">return</span>; <span class="hl-c">// unknown format or over the input budget</span>
 <span class="hl-k">if</span> (info.hasAlpha) {
-  <span class="hl-c">// keep PNG; otherwise flatten to JPEG</span>
+  <span class="hl-k">const</span> alpha = <span class="hl-k">await</span> rastermill.transparency(buffer);
+  <span class="hl-c">// Use alpha.hasAlphaChannel or alpha.hasTransparentPixels for policy.</span>
 }</code></pre>
 <h2 id="header-only-helpers"><a class="anchor" href="#header-only-helpers" aria-label="Anchor link">#</a>Header-only helpers</h2>
-<p><code>readImageProbeFromHeader(input)</code> and <code>readImageMetadataFromHeader(input)</code> are exported as synchronous, budget-free header parsers. <code>probe</code> builds on the former and adds the configured pixel-budget check.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="configuration.html"><small>Previous</small><span>Configuration</span></a><a class="page-nav-next" href="encode.html"><small>Next</small><span>encode</span></a></nav></article>
+<p><code>readImageProbeFromHeader(input)</code> and <code>readImageMetadataFromHeader(input)</code> are exported as synchronous, budget-free header parsers. <code>probe</code> builds on the former and adds the configured pixel-budget check.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="configuration.html"><small>Previous</small><span>Configuration</span></a><a class="page-nav-next" href="transparency.html"><small>Next</small><span>transparency</span></a></nav></article>
         <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#result">Result</a><a class="toc-l2" href="#lenient-by-design">Lenient by design</a><a class="toc-l2" href="#header-only-helpers">Header-only helpers</a></nav>
       </div>
     </main>

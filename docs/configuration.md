@@ -7,7 +7,7 @@ functions that lazily create a default-configured instance on first use.
 import { createRastermill } from "rastermill";
 
 const rastermill = createRastermill({
-  backend: "auto",
+  execution: "auto",
   limits: {
     inputPixels: 25_000_000,
     outputPixels: 25_000_000,
@@ -21,14 +21,15 @@ const rastermill = createRastermill({
 });
 ```
 
-`createRastermill(options?)` returns a `Rastermill` with `probe`, `encode`, and
-`encodeWithinBytes`.
+`createRastermill(options?)` returns a `Rastermill` with `probe`,
+`transparency`, `encode`, and `encodeWithinBytes`.
 
 ## Options
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `backend` | `ImageBackendPreference` | `"auto"` (or env) | Force a backend or let Rastermill pick. See [Backends](./backends.md). |
+| `execution` | `"auto" \| "internal" \| "external"` | `"auto"` | Control whether Rastermill may use external processes. See [Backends](./backends.md). |
+| `backend` | `ImageBackendPreference` | `"auto"` (or env) | Advanced escape hatch to force one backend. See [Backends](./backends.md). |
 | `limits.inputPixels` | `number` | `25_000_000` | Reject decoding any image whose `width × height` exceeds this. |
 | `limits.outputPixels` | `number` | falls back to `limits.inputPixels`, else `25_000_000` | Reject resize targets larger than this. |
 | `temp.rootDir` | `string` | OS temp dir | Parent directory for external-backend workspaces. |
@@ -72,6 +73,17 @@ const rastermill = createRastermill({
 });
 ```
 
+## Execution mode
+
+`execution` is the broad runtime boundary:
+
+- `"auto"` uses Photon in-process where it can and external tools for codecs Photon does not support.
+- `"internal"` forbids child processes and only uses in-process backends.
+- `"external"` skips in-process backends and only uses native tools.
+
+Use `"internal"` for strict sandboxes and serverless runtimes. Keep `"auto"` if
+you need HEIC/AVIF conversion today.
+
 ## Backend preference from the environment
 
 When `backend` is not passed, Rastermill reads the preference from the environment
@@ -105,8 +117,8 @@ const rastermill = createRastermill({
 ## Module functions
 
 For one-off calls you can skip `createRastermill` and import the functions directly.
-They lazily create a default `Rastermill` instance on first use (`backend:
-"auto"`, 25 MP budgets):
+They lazily create a default `Rastermill` instance on first use (`execution:
+"auto"`, `backend: "auto"`, 25 MP budgets):
 
 ```ts
 import { probe, encode } from "rastermill";

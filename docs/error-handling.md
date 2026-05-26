@@ -35,13 +35,13 @@ executables, a missing Photon package, unsupported formats, or absent codecs.
 ```ts
 class RastermillUnavailableError extends RastermillError {
   readonly code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
-  readonly operation: "encode";
+  readonly operation: "encode" | "transparency";
   readonly causes: unknown[]; // the per-backend errors collected
 }
 ```
 
 - `code` is the stable string `"RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE"`.
-- `operation` is always `"encode"` (the single operation that runs backends).
+- `operation` is `"encode"` or `"transparency"`.
 - `causes` holds the error thrown by each attempted backend, in order. The
   standard `Error.cause` is set to the first `Error` among them.
 - `message` lists the backends Rastermill tried.

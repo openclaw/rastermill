@@ -1,9 +1,12 @@
 # Backends
 
-Rastermill can run an operation through several backends. With `backend: "auto"`
-(the default) it tries them in a sensible order for the current platform and
-operation, falling back to the next when one is unavailable. You can also pin a
-single backend.
+Rastermill can run either in-process, through native tools, or in automatic mode
+that uses both. `execution: "auto"` is the default: it uses Photon for common
+formats and falls through to external tools for codecs Photon does not support.
+
+Use `execution: "internal"` to forbid child processes. Use
+`execution: "external"` when you explicitly want native tool behavior. Advanced
+callers can still pin a single backend with `backend`.
 
 ## Available backends
 
@@ -18,9 +21,9 @@ single backend.
 
 ## Automatic order
 
-When `backend: "auto"`, the candidate list depends on the output format and the
-platform. Photon is tried first whenever it can handle the format, then native
-tools fill the gaps.
+When `execution: "auto"` and `backend: "auto"`, the candidate list depends on
+the output format and the platform. Photon is tried first whenever it can handle
+the format, then native tools fill the gaps.
 
 `encode` to JPEG (this also covers HEIC/AVIF → JPEG, where Photon fails to decode
 and falls through to native):
@@ -50,6 +53,18 @@ immediately.
 If every candidate is unavailable, Rastermill throws a
 [`RastermillUnavailableError`](./error-handling.md) listing the backends it tried and
 the collected causes.
+
+## Execution modes
+
+```ts
+createRastermill({ execution: "auto" });     // Photon first, native tools as needed
+createRastermill({ execution: "internal" }); // no child processes
+createRastermill({ execution: "external" }); // native tools only
+```
+
+`execution: "internal"` currently supports PNG, JPEG, GIF, and WebP input through
+Photon. It cannot decode HEIC/AVIF, so those operations fail with
+`RastermillUnavailableError` instead of spawning `sips`, ImageMagick, or ffmpeg.
 
 ## Forcing a backend
 

@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>encodeWithinBytes — Rastermill</title>
-  <meta name="description" content="encodeWithinBytes documentation for Rastermill.">
-  <link rel="canonical" href="https://rastermill.com/encode-within-bytes.html">
+  <title>transparency — Rastermill</title>
+  <meta name="description" content="transparency documentation for Rastermill.">
+  <link rel="canonical" href="https://rastermill.com/transparency.html">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Rastermill">
-  <meta property="og:title" content="encodeWithinBytes — Rastermill">
-  <meta property="og:description" content="encodeWithinBytes documentation for Rastermill.">
-  <meta property="og:url" content="https://rastermill.com/encode-within-bytes.html">
+  <meta property="og:title" content="transparency — Rastermill">
+  <meta property="og:description" content="transparency documentation for Rastermill.">
+  <meta property="og:url" content="https://rastermill.com/transparency.html">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="encodeWithinBytes — Rastermill">
-  <meta name="twitter:description" content="encodeWithinBytes documentation for Rastermill.">
+  <meta name="twitter:title" content="transparency — Rastermill">
+  <meta name="twitter:description" content="transparency documentation for Rastermill.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -85,57 +85,39 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link active" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link active" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
         <div class="hero-text">
           <p class="eyebrow">API</p>
-          <h1>encodeWithinBytes</h1>
+          <h1>transparency</h1>
         </div>
         <div class="hero-meta">
           <a class="repo" href="https://github.com/openclaw/rastermill" rel="noopener">GitHub</a>
-          <a class="edit" href="https://github.com/openclaw/rastermill/edit/main/docs/encode-within-bytes.md" rel="noopener">Edit page</a>
+          <a class="edit" href="https://github.com/openclaw/rastermill/edit/main/docs/transparency.md" rel="noopener">Edit page</a>
         </div>
       </header>
       <div class="doc-grid">
-        <article class="doc"><h1 id="encodewithinbytes"><code>encodeWithinBytes</code></h1>
-<p>Encode an image to fit under a byte budget.</p>
-<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encodeWithinBytes(input, {
-  format: <span class="hl-s">&quot;jpeg&quot;</span>,
-  maxBytes: 500_000,
-  search: { maxSide: [<span class="hl-n">2048</span>, <span class="hl-n">1536</span>, <span class="hl-n">1024</span>], quality: [<span class="hl-n">85</span>, <span class="hl-n">70</span>, <span class="hl-n">55</span>] },
-});
-<span class="hl-c">// =&gt; EncodedImage &amp; { withinBudget, chosen: { maxSide?, quality?, compressionLevel? } }</span></code></pre>
-<p>It re-encodes across a search space and returns the first result at or under <code>maxBytes</code>. If nothing fits, it returns the smallest result it produced (so you always get usable bytes). <code>withinBudget</code> tells you whether the cap was met, and <code>chosen</code> reports which settings were used.</p>
-<h2 id="options"><a class="anchor" href="#options" aria-label="Anchor link">#</a>Options</h2>
-<pre><code class="language-ts"><span class="hl-k">type</span> EncodeWithinBytesOptions = EncodeOptions &amp; {
-  maxBytes: number;
-  search?: {
-    maxSide?: readonly number[];        <span class="hl-c">// dimensions to try, largest first</span>
-    quality?: readonly number[];        <span class="hl-c">// JPEG quality steps</span>
-    compressionLevel?: readonly number[]; <span class="hl-c">// PNG compression steps</span>
-  };
-};</code></pre>
-<p>The search iterates <code>maxSide</code> outermost, then the format-relevant axis: <code>quality</code> for JPEG, <code>compressionLevel</code> for PNG, and dimensions only for WebP. Sensible defaults are used for any axis you omit. All other <code>EncodeOptions</code> (e.g. <code>resize.fit</code>, <code>autoOrient</code>, <code>signal</code>) are forwarded to each attempt.</p>
-<h2 id="jpeg-vs-png-vs-webp"><a class="anchor" href="#jpeg-vs-png-vs-webp" aria-label="Anchor link">#</a>JPEG vs PNG vs WebP</h2>
-<ul>
-<li><strong>JPEG</strong>: searches <code>maxSide × quality</code>. Best for photos under a hard cap.</li>
-<li><strong>PNG</strong>: searches <code>maxSide × compressionLevel</code>. Lossless, so shrinking dimensions does most of the work.</li>
-<li><strong>WebP</strong>: searches <code>maxSide</code>. Photon&#39;s WebP encoder does not expose quality, so Rastermill does not expose a WebP quality option yet.</li>
-</ul>
-<pre><code class="language-ts"><span class="hl-c">// Shrink a PNG under 256 KB, lossless.</span>
-<span class="hl-k">const</span> png = <span class="hl-k">await</span> rastermill.encodeWithinBytes(input, {
-  format: <span class="hl-s">&quot;png&quot;</span>,
-  maxBytes: 256_000,
-});</code></pre>
+        <article class="doc"><h1 id="transparency"><code>transparency</code></h1>
+<p>Decode an image and inspect alpha facts.</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> alpha = <span class="hl-k">await</span> rastermill.transparency(input);
+<span class="hl-c">// =&gt; { hasAlphaChannel, hasTransparentPixels }</span></code></pre>
+<p><code>probe</code> gives a cheap header hint. <code>transparency</code> answers the pixel question. It uses Photon for PNG, JPEG, GIF, and WebP, including PNG variants whose alpha cannot be answered from the header alone.</p>
 <h2 id="result"><a class="anchor" href="#result" aria-label="Anchor link">#</a>Result</h2>
-<p>The return value is a normal <a href="encode.html"><code>encode</code></a> result plus <code>chosen</code>:</p>
-<pre><code class="language-ts"><span class="hl-k">type</span> EncodedImageWithinBytes = EncodedImage &amp; {
-  withinBudget: boolean;
-  chosen: { maxSide?: number; quality?: number; compressionLevel?: number };
-};</code></pre><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="encode.html"><small>Previous</small><span>encode</span></a><a class="page-nav-next" href="backends.html"><small>Next</small><span>Backends</span></a></nav></article>
-        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l2" href="#jpeg-vs-png-vs-webp">JPEG vs PNG vs WebP</a><a class="toc-l2" href="#result">Result</a></nav>
+<pre><code class="language-ts"><span class="hl-k">type</span> ImageTransparency = {
+  hasAlphaChannel: boolean;
+  hasTransparentPixels: boolean;
+};</code></pre>
+<ul>
+<li><code>hasAlphaChannel</code> means the decoded image or source header has an alpha channel.</li>
+<li><code>hasTransparentPixels</code> means at least one decoded pixel has alpha below 255.</li>
+</ul>
+<p>An opaque RGBA PNG reports <code>{ hasAlphaChannel: true, hasTransparentPixels: false }</code>. A transparent GIF reports both as <code>true</code>. JPEG reports both as <code>false</code> without a decode.</p>
+<h2 id="errors"><a class="anchor" href="#errors" aria-label="Anchor link">#</a>Errors</h2>
+<p><code>transparency</code> enforces <code>limits.inputPixels</code> before decoding. Unlike <code>probe</code>, it throws on oversized or undecodable input. Unsupported internal formats such as HEIC/AVIF throw <code>RastermillUnavailableError</code> because Photon cannot decode them.</p>
+<p><code>transparency</code> never spawns external tools today. If you create Rastermill with <code>execution: &quot;external&quot;</code> or pin an external backend, alpha-capable inputs throw <code>RastermillUnavailableError</code> instead of loading Photon.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="probe.html"><small>Previous</small><span>probe</span></a><a class="page-nav-next" href="encode.html"><small>Next</small><span>encode</span></a></nav></article>
+        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#result">Result</a><a class="toc-l2" href="#errors">Errors</a></nav>
       </div>
     </main>
   </div>

@@ -107,13 +107,17 @@ function validateTempPrefix(value) {
 }
 function normalizeOptions(options) {
     const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
+    const backend = normalizeBackendPreference(options.backend ?? process.env[backendVar]);
+    const execution = normalizeExecutionMode(options.execution);
+    validateBackendExecution(backend, execution);
     const maxInputPixels = normalizePositiveInteger(options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS, "limits.inputPixels");
     const tempPrefix = options.temp?.prefix ?? DEFAULT_TEMP_PREFIX;
     if (typeof tempPrefix === "string") {
         validateTempPrefix(tempPrefix);
     }
     return {
-        backend: normalizeBackendPreference(options.backend ?? process.env[backendVar]),
+        backend,
+        execution,
         maxInputPixels,
         maxOutputPixels: normalizePositiveInteger(options.limits?.outputPixels ?? maxInputPixels, "limits.outputPixels"),
         tempRootDir: normalizeTempRootDir(options.temp?.rootDir),
@@ -122,6 +126,41 @@ function normalizeOptions(options) {
         maxProcessBufferBytes: normalizePositiveInteger(options.maxProcessBufferBytes ?? DEFAULT_MAX_PROCESS_BUFFER_BYTES, "maxProcessBufferBytes"),
         commandResolver: options.commandResolver ?? resolveExecutableFromPath,
     };
+}
+function normalizeExecutionMode(value) {
+    const normalized = value?.trim().toLowerCase();
+    switch (normalized) {
+        case undefined:
+        case "":
+        case "auto":
+            return "auto";
+        case "internal":
+        case "in-process":
+        case "inprocess":
+            return "internal";
+        case "external":
+        case "native":
+            return "external";
+        default:
+            throw rastermillError("RASTERMILL_BAD_OPTION", 'execution must be "auto", "internal", or "external"');
+    }
+}
+function isInternalBackend(backend) {
+    return backend === "photon";
+}
+function allowsInternalBackend(options) {
+    return options.execution !== "external" && (options.backend === "auto" || options.backend === "photon");
+}
+function validateBackendExecution(backend, execution) {
+    if (backend === "auto" || execution === "auto") {
+        return;
+    }
+    if (execution === "internal" && !isInternalBackend(backend)) {
+        throw rastermillError("RASTERMILL_BAD_OPTION", `backend ${backend} is external but execution is internal`);
+    }
+    if (execution === "external" && isInternalBackend(backend)) {
+        throw rastermillError("RASTERMILL_BAD_OPTION", `backend ${backend} is internal but execution is external`);
+    }
 }
 function normalizeBackendPreference(value) {
     const normalized = value?.trim().toLowerCase();
@@ -201,6 +240,16 @@ function readWebpAlphaChannel(buffer) {
     }
     if (buffer.toString("ascii", 12, 16) === "VP8X") {
         return (buffer[20] ?? 0) & 0x10 ? true : false;
+    }
+    if (buffer.toString("ascii", 12, 16) === "VP8L") {
+        if (buffer.length < 25 || buffer[20] !== 0x2f) {
+            return null;
+        }
+        const bits = buffer.readUInt8(21) |
+            (buffer.readUInt8(22) << 8) |
+            (buffer.readUInt8(23) << 16) |
+            (buffer.readUInt8(24) << 24);
+        return (bits >>> 28) & 1 ? true : false;
     }
     return null;
 }
@@ -512,9 +561,9 @@ function hasPhotonDecodableHeader(buffer) {
         readWebpMetadata(buffer) !== null ||
         readJpegMetadata(buffer) !== null);
 }
-function assertPhotonDecodableHeader(buffer) {
+function assertPhotonDecodableHeader(buffer, operation) {
     if (!hasPhotonDecodableHeader(buffer)) {
-        throw new RastermillUnavailableError("encode", "Photon cannot decode this image format");
+        throw new RastermillUnavailableError(operation, "Photon cannot decode this image format");
     }
 }
 function validatePixelBudget(meta, maxInputPixels) {
@@ -781,9 +830,9 @@ function decodeGrayscaleAlphaPng(buffer) {
     }
     return { pixels, width, height };
 }
-async function loadOrientedPhotonImage(buffer, maxInputPixels, autoOrient = true) {
+async function loadOrientedPhotonImage(buffer, maxInputPixels, autoOrient = true, operation = "encode") {
     assertHeaderPixelBudget(buffer, maxInputPixels);
-    assertPhotonDecodableHeader(buffer);
+    assertPhotonDecodableHeader(buffer, operation);
     const photon = await loadPhoton();
     let decoded;
     try {
@@ -938,6 +987,27 @@ function resizePhotonImage(photon, image, resize) {
     }
     return resized;
 }
+function scanRgbaTransparency(pixels) {
+    for (let offset = 3; offset < pixels.length; offset += 4) {
+        if ((pixels[offset] ?? 255) < 255) {
+            return true;
+        }
+    }
+    return false;
+}
+async function readPhotonTransparency(buffer, header, maxInputPixels) {
+    const { image } = await loadOrientedPhotonImage(buffer, maxInputPixels, false, "transparency");
+    try {
+        const hasTransparentPixels = scanRgbaTransparency(image.get_raw_pixels());
+        return {
+            hasAlphaChannel: header.hasAlpha === true || hasTransparentPixels,
+            hasTransparentPixels,
+        };
+    }
+    finally {
+        image.free();
+    }
+}
 function crc32(buffer) {
     let crc = 0xffffffff;
     for (const byte of buffer) {
@@ -982,25 +1052,27 @@ export function encodePngRgba(pixels, width, height, compressionLevel = 6) {
         pngChunk("IEND", Buffer.alloc(0)),
     ]);
 }
-function backendsForFormat(format, preference) {
-    if (preference !== "auto") {
-        return [preference];
+function backendsForFormat(format, preference, execution) {
+    const candidates = preference !== "auto"
+        ? [preference]
+        : format === "webp"
+            ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
+            : format === "png"
+                ? process.platform === "win32"
+                    ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
+                    : ["photon", "imagemagick", "graphicsmagick"]
+                : process.platform === "darwin"
+                    ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
+                    : process.platform === "win32"
+                        ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
+                        : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+    if (execution === "internal") {
+        return candidates.filter(isInternalBackend);
     }
-    if (format === "webp") {
-        return ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+    if (execution === "external") {
+        return candidates.filter((backend) => !isInternalBackend(backend));
     }
-    // PNG: only Photon and the magick tools encode it; sips/ffmpeg cannot.
-    if (format === "png") {
-        return process.platform === "win32"
-            ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
-            : ["photon", "imagemagick", "graphicsmagick"];
-    }
-    // JPEG, including HEIC/AVIF inputs that Photon rejects and that fall through to native.
-    return process.platform === "darwin"
-        ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
-        : process.platform === "win32"
-            ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
-            : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+    return candidates;
 }
 function isBackendUnavailable(error) {
     if (error instanceof RastermillUnavailableError) {
@@ -1034,7 +1106,7 @@ function isBackendUnavailable(error) {
 }
 async function runWithBackends(format, options, fn) {
     const errors = [];
-    const backends = backendsForFormat(format, options.backend);
+    const backends = backendsForFormat(format, options.backend, options.execution);
     for (const backend of backends) {
         try {
             return await fn(backend);
@@ -1523,6 +1595,35 @@ function createProcessor(options) {
             }
             return null;
         },
+        async transparency(input) {
+            const buffer = toBuffer(input);
+            const header = readImageProbeFromHeader(buffer);
+            if (!header) {
+                throw rastermillError("RASTERMILL_UNDECODABLE", "Unable to determine image dimensions; refusing to process");
+            }
+            validatePixelBudget(header, options.maxInputPixels);
+            if (header.hasAlpha === false) {
+                return {
+                    hasAlphaChannel: false,
+                    hasTransparentPixels: false,
+                };
+            }
+            if (!allowsInternalBackend(options)) {
+                throw new RastermillUnavailableError("transparency", "Internal image processing is disabled for transparency inspection");
+            }
+            try {
+                return await readPhotonTransparency(buffer, header, options.maxInputPixels);
+            }
+            catch (error) {
+                if (error instanceof RastermillUnavailableError) {
+                    throw error;
+                }
+                if (isBackendUnavailable(error)) {
+                    throw new RastermillUnavailableError("transparency", "Image processor unavailable for transparency inspection; tried: photon", [error]);
+                }
+                throw error;
+            }
+        },
         async encode(input, encodeOptions) {
             const buffer = toBuffer(input);
             const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
@@ -1688,6 +1789,9 @@ function getDefaultRastermill() {
 }
 export async function probe(input) {
     return await getDefaultRastermill().probe(input);
+}
+export async function transparency(input) {
+    return await getDefaultRastermill().transparency(input);
 }
 export async function encode(input, options) {
     return await getDefaultRastermill().encode(input, options);

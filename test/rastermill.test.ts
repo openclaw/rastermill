@@ -586,6 +586,80 @@ describe("Rastermill", () => {
     expect(result.resized).toBe(true);
   });
 
+  it("derives byte-budget search sides from small dimension limits", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encode(gradientRgbaImage(200, 100), {
+      format: "auto",
+      limits: { maxWidth: 160 },
+      opaque: { format: "jpeg" },
+      transparency: "flatten",
+      maxBytes: 800,
+    });
+
+    expect(result.withinBudget).toBe(true);
+    expect(result.bytes).toBeLessThanOrEqual(800);
+    expect(result.width).toBeLessThan(160);
+    expect(result.chosen.maxSide).toBeLessThan(160);
+  });
+
+  it("does not treat a width-only resize as the byte-search max side", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encode(rgbaImage(20, 200), {
+      format: "jpeg",
+      resize: { width: 10 },
+      maxBytes: 10_000,
+    });
+
+    expect(result.width).toBe(10);
+    expect(result.height).toBe(100);
+    expect(result.chosen.maxSide).toBe(100);
+  });
+
+  it("keeps the resolved resize target as the first budget candidate", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encode(rgbaImage(20, 200), {
+      format: "jpeg",
+      resize: { width: 1000, height: 100 },
+      maxBytes: 10_000,
+    });
+
+    expect(result.width).toBe(10);
+    expect(result.height).toBe(100);
+    expect(result.chosen.maxSide).toBe(100);
+  });
+
+  it("preserves explicit upscaling while searching byte-budget candidates", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encode(rgbaImage(10, 10), {
+      format: "jpeg",
+      resize: { width: 100, height: 100, enlarge: true },
+      maxBytes: 700,
+      search: { maxSide: [100, 50], quality: [85] },
+    });
+
+    expect(result.withinBudget).toBe(true);
+    expect(result.width).toBe(50);
+    expect(result.height).toBe(50);
+  });
+
+  it("tries derived byte-budget search sides from largest to smallest", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encode(gradientRgbaImage(1500, 100), {
+      format: "jpeg",
+      resize: { maxSide: 1200 },
+      maxBytes: 65_000,
+      search: { quality: [85] },
+    });
+
+    expect(result.withinBudget).toBe(true);
+    expect(result.chosen.maxSide).toBe(900);
+  });
+
   it("keeps maxPixels limits after dimension-limited resizing", async () => {
     const rastermill = createRastermill();
 
@@ -856,6 +930,13 @@ describe("Rastermill", () => {
     ).rejects.toBeInstanceOf(RastermillError);
     await expect(
       rastermill.encode(rgbaImage(8, 8), { format: "png", resize: { maxSide: 0 } }),
+    ).rejects.toMatchObject({ code: "RASTERMILL_BAD_OPTION" });
+    await expect(
+      rastermill.encode(rgbaImage(8, 8), {
+        format: "jpeg",
+        maxBytes: 100,
+        search: { maxSide: [0] },
+      }),
     ).rejects.toMatchObject({ code: "RASTERMILL_BAD_OPTION" });
     expect(() => createRastermill({ execution: "sideways" as never })).toThrow(/execution/);
   });

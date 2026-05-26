@@ -13,6 +13,7 @@ const DEFAULT_PNG_COMPRESSION_LEVEL = 6;
 const DEFAULT_TEMP_PREFIX = "rastermill-";
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const DEFAULT_PNG_SIDES = [2048, 1536, 1280, 1024, 800];
+const DEFAULT_LOSSY_SIDES = [2048, 1536, 1280, 1024, 800];
 const DEFAULT_PNG_COMPRESSION_LEVELS = [6, 7, 8, 9];
 const ISO_BMFF_IMAGE_BRANDS = new Set([
     "avif",
@@ -1727,25 +1728,42 @@ function encodeAutoWithinBytesOptions(formatOptions, options) {
         ...(options.search === undefined ? {} : { search: options.search }),
     };
 }
-function resizeForSearchMaxSide(resize, maxSide) {
-    const nextResize = { ...resize, maxSide };
-    if (resize?.width === undefined && resize?.height === undefined) {
-        return nextResize;
+function resizeForSearchMaxSide(resize, rawMaxSide, metadata) {
+    const maxSide = normalizePositiveInteger(rawMaxSide, "search.maxSide");
+    const normalized = normalizeResizeOptions(resize, metadata);
+    const target = finalDimensions(metadata, normalized);
+    const targetMaxSide = Math.max(target.width, target.height);
+    if (targetMaxSide <= maxSide) {
+        return resize ?? {};
     }
-    const boxMaxSide = Math.max(resize.width ?? 0, resize.height ?? 0);
-    if (boxMaxSide <= 0 || boxMaxSide <= maxSide) {
-        return nextResize;
-    }
-    const scale = maxSide / boxMaxSide;
+    const scale = maxSide / targetMaxSide;
     return {
-        ...nextResize,
-        ...(resize.width === undefined
-            ? {}
-            : { width: Math.max(1, Math.floor(resize.width * scale)) }),
-        ...(resize.height === undefined
-            ? {}
-            : { height: Math.max(1, Math.floor(resize.height * scale)) }),
+        fit: normalized.fit,
+        width: Math.max(1, Math.floor(target.width * scale)),
+        height: Math.max(1, Math.floor(target.height * scale)),
+        enlarge: resize?.enlarge === true,
     };
+}
+function searchResizeMaxSide(resize, metadata) {
+    if (!resize) {
+        return undefined;
+    }
+    const target = finalDimensions(metadata, normalizeResizeOptions(resize, metadata));
+    return Math.max(target.width, target.height);
+}
+function defaultSearchMaxSides(format, resize, metadata) {
+    const defaults = format === "png" ? [...DEFAULT_PNG_SIDES] : [...DEFAULT_LOSSY_SIDES];
+    const resizeMaxSide = searchResizeMaxSide(resize, metadata);
+    if (resizeMaxSide === undefined) {
+        return defaults;
+    }
+    const fractions = [0.75, 0.5, 0.375, 0.25, 0.1875, 0.125];
+    const candidates = [
+        resizeMaxSide,
+        ...defaults.filter((side) => side < resizeMaxSide),
+        ...fractions.map((fraction) => Math.max(1, Math.floor(resizeMaxSide * fraction))),
+    ];
+    return [...new Set(candidates)].sort((a, b) => b - a);
 }
 async function inspectImageTransparency(rastermill, buffer, header) {
     if (header?.hasAlpha === false) {
@@ -1996,16 +2014,11 @@ function createProcessor(options) {
         async encodeWithBudget(input, encodeOptions) {
             const buffer = toBuffer(input);
             const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
-            const defaultMaxSides = encodeOptions.format === "png" ? [...DEFAULT_PNG_SIDES] : [2048, 1536, 1280, 1024, 800];
-            const resizeMaxSide = encodeOptions.resize?.maxSide;
+            const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
+            const orientedMetadata = autoOrientedMetadata(buffer, metadata, encodeOptions.autoOrient !== false);
             const maxSides = encodeOptions.search?.maxSide?.length
                 ? [...encodeOptions.search.maxSide]
-                : resizeMaxSide === undefined
-                    ? defaultMaxSides
-                    : [
-                        normalizePositiveInteger(resizeMaxSide, "resize.maxSide"),
-                        ...defaultMaxSides.filter((side) => side < resizeMaxSide),
-                    ].filter((side, index, sides) => sides.indexOf(side) === index);
+                : defaultSearchMaxSides(encodeOptions.format, encodeOptions.resize, orientedMetadata);
             const qualities = encodeOptions.search?.quality?.length
                 ? [...encodeOptions.search.quality]
                 : [85, 75, 65, 55, 45, 35];
@@ -2022,7 +2035,7 @@ function createProcessor(options) {
                         ? compressionLevels
                         : [undefined]) {
                         try {
-                            const nextResize = resizeForSearchMaxSide(encodeOptions.resize, side);
+                            const nextResize = resizeForSearchMaxSide(encodeOptions.resize, side, orientedMetadata);
                             const out = encodeOptions.format === "jpeg"
                                 ? await rastermill.encodeDirect(buffer, {
                                     ...encodeOptions,

@@ -4,7 +4,7 @@ Inspect an image without a full decode.
 
 ```ts
 const info = await rastermill.probe(input);
-// => { format, width, height, hasAlpha, orientation } | null
+// => { format, width, height, bytes, hasAlpha, orientation } | null
 ```
 
 `probe` reads the file header to report the format and dimensions, plus an alpha
@@ -19,6 +19,7 @@ type ImageProbe = {
   format: ImageFormat;        // "png" | "jpeg" | "gif" | "webp" | "bmp" | "tiff" | "heif" | "avif"
   width: number;
   height: number;
+  bytes: number;
   hasAlpha: boolean | null;   // null when the header can't tell
   orientation: number | null; // EXIF orientation 1–8, or null
 };

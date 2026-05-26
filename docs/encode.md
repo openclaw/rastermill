@@ -4,7 +4,7 @@ Resize and re-encode an image to a target format.
 
 ```ts
 const out = await rastermill.encode(input, {
-  format: "jpeg",            // "jpeg" | "png"
+  format: "jpeg",            // "jpeg" | "png" | "webp"
   resize: { maxSide: 1600 },
   quality: 85,
 });
@@ -18,20 +18,37 @@ dimensions, so callers never need to re-probe.
 ## Options
 
 ```ts
-type EncodeOptions = {
-  format: "jpeg" | "png";
-  resize?: ResizeOptions;
-  quality?: number;          // JPEG, 1–100 (default 85)
-  png?: { compressionLevel?: number }; // 0–9 (default 6)
-  autoOrient?: boolean;      // default true
-};
+type EncodeOptions =
+  | {
+      format: "jpeg";
+      resize?: ResizeOptions;
+      quality?: number;      // 1–100 (default 85)
+      autoOrient?: boolean;  // default true
+      signal?: AbortSignal;
+    }
+  | {
+      format: "png";
+      resize?: ResizeOptions;
+      compressionLevel?: number; // 0–9 (default 6)
+      autoOrient?: boolean;      // default true
+      signal?: AbortSignal;
+    }
+  | {
+      format: "webp";
+      resize?: ResizeOptions;
+      autoOrient?: boolean;      // default true
+      signal?: AbortSignal;
+    };
 ```
+
+Format-specific options are part of the discriminated union: `quality` is only
+valid for JPEG, and `compressionLevel` is only valid for PNG.
 
 ### Resize
 
 ```ts
 type ResizeOptions = {
-  fit?: "inside" | "fill";   // "cover" is not implemented yet
+  fit?: "inside" | "cover" | "fill";
   maxSide?: number;          // fit the longest side into this box
   width?: number;
   height?: number;
@@ -41,6 +58,8 @@ type ResizeOptions = {
 
 - **`inside`** (default) scales to fit within the given box (`maxSide`, or
   `width`/`height`), preserving aspect ratio.
+- **`cover`** scales to cover the target box, then center-crops. Use `maxSide`
+  for a square crop, or pass both `width` and `height`.
 - **`fill`** stretches to exactly `width × height`.
 - Omit `resize` entirely to re-encode at the original size — this is how you do a
   straight format conversion.
@@ -62,9 +81,9 @@ available you get a [`RastermillUnavailableError`](./error-handling.md).
 
 ## Orientation
 
-EXIF orientation is applied by default so the output pixels are upright. Pass
-`autoOrient: false` to keep the original pixel layout (and any orientation
-metadata the encoder writes).
+JPEG EXIF orientation is applied by default so the output pixels are upright.
+Pass `autoOrient: false` to keep the original pixel layout. HEIC/AVIF orientation
+is delegated to the native backend and may vary by tool.
 
 ## Pixel budgets
 

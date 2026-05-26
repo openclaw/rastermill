@@ -1,7 +1,23 @@
 # Error handling
 
-Rastermill distinguishes "no backend could do this" from "this specific image is
-broken," and surfaces the former through a dedicated error type.
+Rastermill distinguishes "no backend could do this" from validation and decode
+failures. All Rastermill-owned failures carry a stable `code`.
+
+## `RastermillError`
+
+```ts
+class RastermillError extends Error {
+  readonly code:
+    | "RASTERMILL_INPUT_TOO_LARGE"
+    | "RASTERMILL_OUTPUT_TOO_LARGE"
+    | "RASTERMILL_BAD_OPTION"
+    | "RASTERMILL_UNDECODABLE"
+    | "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
+}
+```
+
+Use `isRastermillError(error)` when you want to branch on these codes without
+matching error-message text.
 
 ## `RastermillUnavailableError`
 
@@ -9,7 +25,7 @@ Thrown when every candidate backend for an operation is unavailable — missing
 executables, a missing Photon package, unsupported formats, or absent codecs.
 
 ```ts
-class RastermillUnavailableError extends Error {
+class RastermillUnavailableError extends RastermillError {
   readonly code: "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
   readonly operation: "encode";
   readonly causes: unknown[]; // the per-backend errors collected
@@ -54,13 +70,13 @@ being mistaken for a missing tool.
 
 ## Validation errors
 
-Pixel-budget and option violations throw plain `Error`s before any backend
-runs, with descriptive messages:
+Pixel-budget and option violations throw `RastermillError`s before any backend
+runs:
 
-- dimensions exceed `limits.inputPixels`
-- resize target exceeds `limits.outputPixels`
-- unknown dimensions ("refusing to process")
-- invalid option values (e.g. a non-positive `resize.maxSide`)
+- `RASTERMILL_INPUT_TOO_LARGE`: dimensions exceed `limits.inputPixels`
+- `RASTERMILL_OUTPUT_TOO_LARGE`: resize target exceeds `limits.outputPixels`
+- `RASTERMILL_UNDECODABLE`: unknown dimensions or decode failure
+- `RASTERMILL_BAD_OPTION`: invalid option values, e.g. a non-positive `resize.maxSide`
 
 Note that [`probe`](./probe.md) is lenient: it returns `null` instead of
 throwing when an image is over budget or undecodable.

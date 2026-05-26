@@ -4,11 +4,12 @@ export type ImageMetadata = {
     height: number;
 };
 export type ImageFormat = "png" | "gif" | "webp" | "bmp" | "tiff" | "heif" | "avif" | "jpeg";
-export type EncodedImageFormat = "jpeg" | "png";
+export type EncodedImageFormat = "jpeg" | "png" | "webp";
 export type ImageProbe = ImageMetadata & {
     format: ImageFormat;
     hasAlpha: boolean | null;
     orientation: number | null;
+    bytes: number;
 };
 export type ImageBackend = "photon" | "sips" | "windows-native" | "imagemagick" | "graphicsmagick" | "ffmpeg";
 export type ImageBackendPreference = ImageBackend | "auto";
@@ -39,15 +40,23 @@ export type ResizeOptions = {
     height?: number;
     enlarge?: boolean;
 };
-export type EncodeOptions = {
-    format: EncodedImageFormat;
+type BaseEncodeOptions = {
     resize?: ResizeOptions;
-    quality?: number;
-    png?: {
-        compressionLevel?: number;
-    };
     autoOrient?: boolean;
+    signal?: AbortSignal;
 };
+export type JpegEncodeOptions = BaseEncodeOptions & {
+    format: "jpeg";
+    quality?: number;
+};
+export type PngEncodeOptions = BaseEncodeOptions & {
+    format: "png";
+    compressionLevel?: number;
+};
+export type WebpEncodeOptions = BaseEncodeOptions & {
+    format: "webp";
+};
+export type EncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOptions;
 export type EncodedImage = ImageMetadata & {
     data: Buffer;
     format: EncodedImageFormat;
@@ -63,6 +72,7 @@ export type EncodeWithinBytesOptions = EncodeOptions & {
     search?: EncodeSearchOptions;
 };
 export type EncodedImageWithinBytes = EncodedImage & {
+    withinBudget: boolean;
     chosen: {
         maxSide?: number;
         quality?: number;
@@ -75,12 +85,17 @@ export type Rastermill = {
     encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
 };
 type ImageOperation = "encode";
-export declare class RastermillUnavailableError extends Error {
-    readonly code = "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
+export type RastermillErrorCode = "RASTERMILL_INPUT_TOO_LARGE" | "RASTERMILL_OUTPUT_TOO_LARGE" | "RASTERMILL_BAD_OPTION" | "RASTERMILL_UNDECODABLE" | "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
+export declare class RastermillError extends Error {
+    readonly code: RastermillErrorCode;
+    constructor(code: RastermillErrorCode, message: string, options?: ErrorOptions);
+}
+export declare class RastermillUnavailableError extends RastermillError {
     readonly operation: ImageOperation;
     readonly causes: unknown[];
     constructor(operation: ImageOperation, message: string, causes?: unknown[]);
 }
+export declare function isRastermillError(error: unknown): error is RastermillError;
 export declare function isRastermillUnavailableError(error: unknown): error is RastermillUnavailableError;
 export declare function readImageMetadataFromHeader(input: ImageInput): ImageMetadata | null;
 export declare function readImageProbeFromHeader(input: ImageInput): ImageProbe | null;

@@ -18,12 +18,13 @@ export type ImageMetadata = {
 };
 
 export type ImageFormat = "png" | "gif" | "webp" | "bmp" | "tiff" | "heif" | "avif" | "jpeg";
-export type EncodedImageFormat = "jpeg" | "png";
+export type EncodedImageFormat = "jpeg" | "png" | "webp";
 
 export type ImageProbe = ImageMetadata & {
   format: ImageFormat;
   hasAlpha: boolean | null;
   orientation: number | null;
+  bytes: number;
 };
 
 export type ImageBackend =
@@ -77,15 +78,27 @@ export type ResizeOptions = {
   enlarge?: boolean;
 };
 
-export type EncodeOptions = {
-  format: EncodedImageFormat;
+type BaseEncodeOptions = {
   resize?: ResizeOptions;
-  quality?: number;
-  png?: {
-    compressionLevel?: number;
-  };
   autoOrient?: boolean;
+  signal?: AbortSignal;
 };
+
+export type JpegEncodeOptions = BaseEncodeOptions & {
+  format: "jpeg";
+  quality?: number;
+};
+
+export type PngEncodeOptions = BaseEncodeOptions & {
+  format: "png";
+  compressionLevel?: number;
+};
+
+export type WebpEncodeOptions = BaseEncodeOptions & {
+  format: "webp";
+};
+
+export type EncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOptions;
 
 export type EncodedImage = ImageMetadata & {
   data: Buffer;
@@ -105,6 +118,7 @@ export type EncodeWithinBytesOptions = EncodeOptions & {
 };
 
 export type EncodedImageWithinBytes = EncodedImage & {
+  withinBudget: boolean;
   chosen: {
     maxSide?: number;
     quality?: number;
@@ -114,9 +128,12 @@ export type EncodedImageWithinBytes = EncodedImage & {
 
 type NativeEncodeOptions = {
   target: ImageMetadata;
+  scaledTarget: ImageMetadata;
+  fit: ResizeFit;
   quality?: number;
   compressionLevel?: number;
   autoOrient?: boolean;
+  signal?: AbortSignal;
 };
 
 export type Rastermill = {
@@ -129,6 +146,13 @@ export type Rastermill = {
 };
 
 type ImageOperation = "encode";
+
+export type RastermillErrorCode =
+  | "RASTERMILL_INPUT_TOO_LARGE"
+  | "RASTERMILL_OUTPUT_TOO_LARGE"
+  | "RASTERMILL_BAD_OPTION"
+  | "RASTERMILL_UNDECODABLE"
+  | "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
 
 type ExternalImageTool =
   | { backend: "sips"; flavor: "sips"; command: string }
@@ -185,19 +209,32 @@ const CRC_TABLE = (() => {
 
 let photonPromise: Promise<PhotonModule> | null = null;
 
-export class RastermillUnavailableError extends Error {
-  readonly code = "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
+export class RastermillError extends Error {
+  readonly code: RastermillErrorCode;
+
+  constructor(code: RastermillErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "RastermillError";
+    this.code = code;
+  }
+}
+
+export class RastermillUnavailableError extends RastermillError {
   readonly operation: ImageOperation;
   readonly causes: unknown[];
 
   constructor(operation: ImageOperation, message: string, causes: unknown[] = []) {
-    super(message, {
+    super("RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE", message, {
       cause: causes.find((cause): cause is Error => cause instanceof Error),
     });
     this.name = "RastermillUnavailableError";
     this.operation = operation;
     this.causes = causes;
   }
+}
+
+export function isRastermillError(error: unknown): error is RastermillError {
+  return error instanceof RastermillError;
 }
 
 export function isRastermillUnavailableError(error: unknown): error is RastermillUnavailableError {
@@ -211,9 +248,17 @@ function toBuffer(input: ImageInput): Buffer {
   return Buffer.from(input);
 }
 
+function rastermillError(
+  code: Exclude<RastermillErrorCode, "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE">,
+  message: string,
+  options?: ErrorOptions,
+): RastermillError {
+  return new RastermillError(code, message, options);
+}
+
 function normalizePositiveInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${label} must be a positive integer`);
+    throw rastermillError("RASTERMILL_BAD_OPTION", `${label} must be a positive integer`);
   }
   return value;
 }
@@ -221,17 +266,17 @@ function normalizePositiveInteger(value: number, label: string): number {
 function normalizeTempRootDir(value: string | undefined): string {
   const rootDir = value ?? os.tmpdir();
   if (rootDir.trim().length === 0) {
-    throw new Error("temp.rootDir must not be empty");
+    throw rastermillError("RASTERMILL_BAD_OPTION", "temp.rootDir must not be empty");
   }
   return rootDir;
 }
 
 function validateTempPrefix(value: string): string {
   if (value.length === 0) {
-    throw new Error("temp.prefix must not be empty");
+    throw rastermillError("RASTERMILL_BAD_OPTION", "temp.prefix must not be empty");
   }
   if (value.includes("/") || value.includes("\\")) {
-    throw new Error("temp.prefix must be a filename prefix");
+    throw rastermillError("RASTERMILL_BAD_OPTION", "temp.prefix must be a filename prefix");
   }
   return value;
 }
@@ -646,11 +691,12 @@ export function readImageProbeFromHeader(input: ImageInput): ImageProbe | null {
       format: "png",
       hasAlpha: readPngAlphaChannel(buffer),
       orientation: null,
+      bytes: buffer.length,
     };
   }
   const gif = readGifMetadata(buffer);
   if (gif) {
-    return { ...gif, format: "gif", hasAlpha: null, orientation: null };
+    return { ...gif, format: "gif", hasAlpha: null, orientation: null, bytes: buffer.length };
   }
   const webp = readWebpMetadata(buffer);
   if (webp) {
@@ -659,15 +705,16 @@ export function readImageProbeFromHeader(input: ImageInput): ImageProbe | null {
       format: "webp",
       hasAlpha: readWebpAlphaChannel(buffer),
       orientation: null,
+      bytes: buffer.length,
     };
   }
   const bmp = readBmpMetadata(buffer);
   if (bmp) {
-    return { ...bmp, format: "bmp", hasAlpha: null, orientation: null };
+    return { ...bmp, format: "bmp", hasAlpha: null, orientation: null, bytes: buffer.length };
   }
   const tiff = readTiffMetadata(buffer);
   if (tiff) {
-    return { ...tiff, format: "tiff", hasAlpha: null, orientation: null };
+    return { ...tiff, format: "tiff", hasAlpha: null, orientation: null, bytes: buffer.length };
   }
   const heif = readIsoBmffImageMetadata(buffer);
   if (heif) {
@@ -676,6 +723,7 @@ export function readImageProbeFromHeader(input: ImageInput): ImageProbe | null {
       format: isAvifImage(buffer) ? "avif" : "heif",
       hasAlpha: null,
       orientation: null,
+      bytes: buffer.length,
     };
   }
   const jpeg = readJpegMetadata(buffer);
@@ -685,6 +733,7 @@ export function readImageProbeFromHeader(input: ImageInput): ImageProbe | null {
       format: "jpeg",
       hasAlpha: false,
       orientation: readJpegExifOrientation(buffer),
+      bytes: buffer.length,
     };
   }
   return null;
@@ -701,7 +750,7 @@ function hasPhotonDecodableHeader(buffer: Buffer): boolean {
 
 function assertPhotonDecodableHeader(buffer: Buffer): void {
   if (!hasPhotonDecodableHeader(buffer)) {
-    throw new Error("Photon cannot decode this image format");
+    throw new RastermillUnavailableError("encode", "Photon cannot decode this image format");
   }
 }
 
@@ -710,7 +759,8 @@ function validatePixelBudget(meta: ImageMetadata, maxInputPixels: number): Image
     const pixels = Number.isSafeInteger(meta.width * meta.height)
       ? ` (${meta.width * meta.height} pixels)`
       : "";
-    throw new Error(
+    throw rastermillError(
+      "RASTERMILL_INPUT_TOO_LARGE",
       `Image dimensions exceed the ${maxInputPixels.toLocaleString("en-US")} pixel input limit: ${meta.width}x${meta.height}${pixels}`,
     );
   }
@@ -720,7 +770,10 @@ function validatePixelBudget(meta: ImageMetadata, maxInputPixels: number): Image
 function assertHeaderPixelBudget(buffer: Buffer, maxInputPixels: number): ImageMetadata {
   const meta = readImageMetadataFromHeader(buffer);
   if (!meta) {
-    throw new Error("Unable to determine image dimensions; refusing to process");
+    throw rastermillError(
+      "RASTERMILL_UNDECODABLE",
+      "Unable to determine image dimensions; refusing to process",
+    );
   }
   return validatePixelBudget(meta, maxInputPixels);
 }
@@ -864,9 +917,13 @@ async function loadPhoton(): Promise<PhotonModule> {
     if (
       typeof mod.PhotonImage?.new_from_byteslice !== "function" ||
       typeof mod.resize !== "function" ||
+      typeof mod.crop !== "function" ||
       mod.SamplingFilter?.Lanczos3 === undefined
     ) {
       throw new Error("Photon did not expose the required image processor API");
+    }
+    if (typeof mod.PhotonImage.prototype.get_bytes_webp !== "function") {
+      throw new Error("Photon did not expose WebP encoding");
     }
     return mod;
   });
@@ -1031,7 +1088,9 @@ async function loadOrientedPhotonImage(
   } catch (error) {
     const grayscaleAlpha = decodeGrayscaleAlphaPng(buffer);
     if (!grayscaleAlpha) {
-      throw error;
+      throw rastermillError("RASTERMILL_UNDECODABLE", "Unable to decode image with Photon", {
+        cause: error,
+      });
     }
     decoded = new photon.PhotonImage(
       grayscaleAlpha.pixels,
@@ -1047,7 +1106,7 @@ function targetSize(
   image: PhotonImage,
   resize: NormalizedResizeOptions,
 ): { width: number; height: number } {
-  return targetDimensions({ width: image.get_width(), height: image.get_height() }, resize);
+  return scaledDimensions({ width: image.get_width(), height: image.get_height() }, resize);
 }
 
 type NormalizedResizeOptions = {
@@ -1077,11 +1136,17 @@ function normalizeResizeOptions(
   if (resize.maxSide !== undefined) {
     normalizePositiveInteger(resize.maxSide, "resize.maxSide");
   }
-  if (resize.fit === "cover") {
-    throw new Error("resize.fit cover is not supported yet");
+  const fit = resize.fit ?? "inside";
+  const hasMaxSide = resize.maxSide !== undefined;
+  const hasWidthAndHeight = resize.width !== undefined && resize.height !== undefined;
+  if ((fit === "cover" || fit === "fill") && !hasMaxSide && !hasWidthAndHeight) {
+    throw rastermillError(
+      "RASTERMILL_BAD_OPTION",
+      `resize.width and resize.height are required when resize.fit is ${fit}`,
+    );
   }
   return {
-    fit: resize.fit ?? "inside",
+    fit,
     ...(resize.width === undefined ? {} : { width: resize.width }),
     ...(resize.height === undefined ? {} : { height: resize.height }),
     ...(resize.maxSide === undefined ? {} : { maxSide: resize.maxSide }),
@@ -1089,13 +1154,28 @@ function normalizeResizeOptions(
   };
 }
 
-function targetDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptions): ImageMetadata {
+function resizeBox(resize: NormalizedResizeOptions): ImageMetadata | null {
+  let boxWidth = resize.width;
+  let boxHeight = resize.height;
+  if (resize.maxSide !== undefined) {
+    boxWidth ??= resize.maxSide;
+    boxHeight ??= resize.maxSide;
+  }
+  return boxWidth === undefined && boxHeight === undefined
+    ? null
+    : { width: boxWidth ?? 0, height: boxHeight ?? 0 };
+}
+
+function scaledDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptions): ImageMetadata {
   if (metadata.width <= 0 || metadata.height <= 0) {
-    throw new Error("Invalid image dimensions");
+    throw rastermillError("RASTERMILL_UNDECODABLE", "Invalid image dimensions");
   }
   if (resize.fit === "fill") {
     if (resize.width === undefined || resize.height === undefined) {
-      throw new Error("resize.width and resize.height are required when resize.fit is fill");
+      throw rastermillError(
+        "RASTERMILL_BAD_OPTION",
+        "resize.width and resize.height are required when resize.fit is fill",
+      );
     }
     if (!resize.enlarge && (resize.width > metadata.width || resize.height > metadata.height)) {
       return { width: metadata.width, height: metadata.height };
@@ -1103,15 +1183,12 @@ function targetDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptio
     return { width: resize.width, height: resize.height };
   }
 
-  let boxWidth = resize.width;
-  let boxHeight = resize.height;
-  if (resize.maxSide !== undefined) {
-    boxWidth ??= resize.maxSide;
-    boxHeight ??= resize.maxSide;
-  }
-  if (boxWidth === undefined && boxHeight === undefined) {
+  const box = resizeBox(resize);
+  if (!box) {
     return { width: metadata.width, height: metadata.height };
   }
+  const boxWidth = box.width === 0 ? undefined : box.width;
+  const boxHeight = box.height === 0 ? undefined : box.height;
   const widthScale = boxWidth === undefined ? Number.POSITIVE_INFINITY : boxWidth / metadata.width;
   const heightScale =
     boxHeight === undefined ? Number.POSITIVE_INFINITY : boxHeight / metadata.height;
@@ -1121,6 +1198,29 @@ function targetDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptio
   return {
     width: Math.max(1, Math.round(metadata.width * scale)),
     height: Math.max(1, Math.round(metadata.height * scale)),
+  };
+}
+
+function finalDimensions(metadata: ImageMetadata, resize: NormalizedResizeOptions): ImageMetadata {
+  const scaled = scaledDimensions(metadata, resize);
+  if (resize.fit !== "cover") {
+    return scaled;
+  }
+  const box = resizeBox(resize);
+  if (!box || box.width <= 0 || box.height <= 0) {
+    return scaled;
+  }
+  const boxAspect = box.width / box.height;
+  const scaledAspect = scaled.width / scaled.height;
+  if (scaledAspect > boxAspect) {
+    return {
+      width: Math.max(1, Math.min(scaled.width, Math.round(scaled.height * boxAspect))),
+      height: scaled.height,
+    };
+  }
+  return {
+    width: scaled.width,
+    height: Math.max(1, Math.min(scaled.height, Math.round(scaled.width / boxAspect))),
   };
 }
 
@@ -1143,11 +1243,15 @@ function assertOutputPixelBudget(
   resize: NormalizedResizeOptions,
   maxOutputPixels: number,
 ): void {
-  const target = targetDimensions(metadata, resize);
-  if (target.width > Math.floor(maxOutputPixels / target.height)) {
-    throw new Error(
-      `Image resize target exceeds the ${maxOutputPixels.toLocaleString("en-US")} pixel output limit: ${target.width}x${target.height}`,
-    );
+  const scaled = scaledDimensions(metadata, resize);
+  const target = finalDimensions(metadata, resize);
+  for (const candidate of [scaled, target]) {
+    if (candidate.width > Math.floor(maxOutputPixels / candidate.height)) {
+      throw rastermillError(
+        "RASTERMILL_OUTPUT_TOO_LARGE",
+        `Image resize target exceeds the ${maxOutputPixels.toLocaleString("en-US")} pixel output limit: ${candidate.width}x${candidate.height}`,
+      );
+    }
   }
 }
 
@@ -1156,12 +1260,29 @@ function resizePhotonImage(
   image: PhotonImage,
   resize: NormalizedResizeOptions,
 ): PhotonImage {
+  const source = { width: image.get_width(), height: image.get_height() };
   const size = targetSize(image, resize);
-  if (size.width === image.get_width() && size.height === image.get_height()) {
-    return image;
+  const resized =
+    size.width === image.get_width() && size.height === image.get_height()
+      ? image
+      : photon.resize(image, size.width, size.height, photon.SamplingFilter.Lanczos3);
+  if (resized !== image) {
+    image.free();
   }
-  const resized = photon.resize(image, size.width, size.height, photon.SamplingFilter.Lanczos3);
-  image.free();
+  if (resize.fit !== "cover") {
+    return resized;
+  }
+  const box = resizeBox(resize);
+  if (box && box.width > 0 && box.height > 0) {
+    const target = finalDimensions(source, resize);
+    const cropWidth = Math.min(target.width, resized.get_width());
+    const cropHeight = Math.min(target.height, resized.get_height());
+    const left = Math.max(0, Math.floor((resized.get_width() - cropWidth) / 2));
+    const top = Math.max(0, Math.floor((resized.get_height() - cropHeight) / 2));
+    const cropped = photon.crop(resized, left, top, left + cropWidth, top + cropHeight);
+    resized.free();
+    return cropped;
+  }
   return resized;
 }
 
@@ -1191,7 +1312,10 @@ export function encodePngRgba(
   normalizePositiveInteger(width, "width");
   normalizePositiveInteger(height, "height");
   if (pixels.byteLength !== width * height * 4) {
-    throw new Error("pixels length must equal width * height * 4");
+    throw rastermillError(
+      "RASTERMILL_BAD_OPTION",
+      "pixels length must equal width * height * 4",
+    );
   }
   const stride = width * 4;
   const raw = Buffer.alloc((stride + 1) * height);
@@ -1227,6 +1351,9 @@ function backendsForFormat(
   if (preference !== "auto") {
     return [preference];
   }
+  if (format === "webp") {
+    return ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+  }
   // PNG: only Photon and the magick tools encode it; sips/ffmpeg cannot.
   if (format === "png") {
     return process.platform === "win32"
@@ -1242,6 +1369,12 @@ function backendsForFormat(
 }
 
 function isBackendUnavailable(error: unknown): boolean {
+  if (error instanceof RastermillUnavailableError) {
+    return true;
+  }
+  if (error instanceof RastermillError) {
+    return false;
+  }
   const messages: string[] = [];
   let current: unknown = error;
   while (current instanceof Error) {
@@ -1394,10 +1527,16 @@ async function withImageTemp<T>(
   }
 }
 
-async function runTool(command: string, args: string[], options: ResolvedOptions): Promise<void> {
+async function runTool(
+  command: string,
+  args: string[],
+  options: ResolvedOptions,
+  signal?: AbortSignal,
+): Promise<void> {
   await execFileAsync(command, args, {
     timeout: options.timeoutMs,
     maxBuffer: options.maxProcessBufferBytes,
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -1419,16 +1558,37 @@ async function runConvertTool(
   tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
   args: string[],
   options: ResolvedOptions,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await runTool(tool.command, convertToolArgs(tool, args), options);
+  await runTool(tool.command, convertToolArgs(tool, args), options, signal);
 }
 
-function buildConvertResizeGeometry(target: ImageMetadata): string {
+function buildConvertResizeGeometry(target: ImageMetadata, fit: ResizeFit): string {
+  if (fit === "cover") {
+    return `${target.width}x${target.height}^`;
+  }
   return `${target.width}x${target.height}!`;
 }
 
-function buildFfmpegResizeFilter(target: ImageMetadata): string {
+function buildFfmpegResizeFilter(target: ImageMetadata, fit: ResizeFit): string {
+  if (fit === "cover") {
+    return `scale=w=${target.width}:h=${target.height}:force_original_aspect_ratio=increase,crop=w=${target.width}:h=${target.height}`;
+  }
   return `scale=w=${target.width}:h=${target.height}`;
+}
+
+function convertResizeArgs(native: NativeEncodeOptions): string[] {
+  if (native.fit === "cover") {
+    return [
+      "-resize",
+      buildConvertResizeGeometry(native.target, native.fit),
+      "-gravity",
+      "center",
+      "-extent",
+      `${native.target.width}x${native.target.height}`,
+    ];
+  }
+  return ["-resize", buildConvertResizeGeometry(native.target, native.fit)];
 }
 
 function sipsOrientationArgs(orientation: number): string[] {
@@ -1456,6 +1616,7 @@ async function sipsApplyOrientation(
   tool: Extract<ExternalImageTool, { flavor: "sips" }>,
   buffer: Buffer,
   options: ResolvedOptions,
+  signal?: AbortSignal,
 ): Promise<Buffer> {
   const orientation = readJpegExifOrientation(buffer);
   const args = orientation ? sipsOrientationArgs(orientation) : [];
@@ -1465,7 +1626,7 @@ async function sipsApplyOrientation(
   return await withImageTemp(options, async (workspace) => {
     const input = await workspace.write("in.jpg", buffer);
     const output = workspace.path("out.jpg");
-    await runTool(tool.command, [...args, input, "--out", output], options);
+    await runTool(tool.command, [...args, input, "--out", output], options, signal);
     return await workspace.read("out.jpg");
   });
 }
@@ -1577,6 +1738,7 @@ async function windowsNativeResize(
         native.autoOrient === false ? "0" : "1",
       ],
       options,
+      native.signal,
     );
     return await workspace.read(outputName);
   });
@@ -1596,12 +1758,31 @@ async function externalToJpeg(
   if (tool.flavor === "sips") {
     return await withImageTemp(options, async (workspace) => {
       const oriented =
-        native.autoOrient === false ? buffer : await sipsApplyOrientation(tool, buffer, options);
+        native.autoOrient === false
+          ? buffer
+          : await sipsApplyOrientation(tool, buffer, options, native.signal);
       const input = await workspace.write("in.img", oriented);
       const output = workspace.path("out.jpg");
-      await runTool(
-        tool.command,
-        [
+      const args =
+        native.fit === "cover"
+          ? [
+              "-z",
+              String(native.scaledTarget.height),
+              String(native.scaledTarget.width),
+              "--cropToHeightWidth",
+              String(native.target.height),
+              String(native.target.width),
+              "-s",
+              "format",
+              "jpeg",
+              "-s",
+              "formatOptions",
+              String(quality),
+              input,
+              "--out",
+              output,
+            ]
+          : [
           "-z",
           String(native.target.height),
           String(native.target.width),
@@ -1614,9 +1795,8 @@ async function externalToJpeg(
           input,
           "--out",
           output,
-        ],
-        options,
-      );
+            ];
+      await runTool(tool.command, args, options, native.signal);
       return await workspace.read("out.jpg");
     });
   }
@@ -1635,7 +1815,7 @@ async function externalToJpeg(
           "-i",
           input,
           "-vf",
-          buildFfmpegResizeFilter(native.target),
+          buildFfmpegResizeFilter(native.target, native.fit),
           "-frames:v",
           "1",
           "-q:v",
@@ -1643,21 +1823,15 @@ async function externalToJpeg(
           output,
         ],
         options,
+        native.signal,
       );
       return await workspace.read("out.jpg");
     }
-    const args = [
-      firstImageScene(tool, input),
-      "-resize",
-      buildConvertResizeGeometry(native.target),
-      "-quality",
-      String(quality),
-      output,
-    ];
+    const args = [firstImageScene(tool, input), ...convertResizeArgs(native), "-quality", String(quality), output];
     if (native.autoOrient !== false) {
       args.splice(1, 0, "-auto-orient");
     }
-    await runConvertTool(tool, args, options);
+    await runConvertTool(tool, args, options, native.signal);
     return await workspace.read("out.jpg");
   });
 }
@@ -1678,11 +1852,7 @@ async function externalToPng(
   return await withImageTemp(options, async (workspace) => {
     const input = await workspace.write("in.img", buffer);
     const output = workspace.path("out.png");
-    const args = [
-      firstImageScene(tool, input),
-      "-resize",
-      buildConvertResizeGeometry(native.target),
-    ];
+    const args = [firstImageScene(tool, input), ...convertResizeArgs(native)];
     if (native.autoOrient !== false) {
       args.splice(1, 0, "-auto-orient");
     }
@@ -1690,8 +1860,57 @@ async function externalToPng(
       args.push("-define", `png:compression-level=${clampInteger(native.compressionLevel, 0, 9)}`);
     }
     args.push(output);
-    await runConvertTool(tool, args, options);
+    await runConvertTool(tool, args, options, native.signal);
     return await workspace.read("out.png");
+  });
+}
+
+async function externalToWebp(
+  backend: Exclude<ImageBackend, "photon" | "sips" | "windows-native">,
+  buffer: Buffer,
+  native: NativeEncodeOptions,
+  options: ResolvedOptions,
+): Promise<Buffer> {
+  const tool = await resolveExternalTool(backend, options);
+  if (!tool || tool.flavor === "sips" || tool.flavor === "powershell") {
+    throw new Error(`Image backend ${backend} is not available for WebP encoding`);
+  }
+  const quality = clampInteger(native.quality ?? DEFAULT_JPEG_QUALITY, 1, 100);
+  return await withImageTemp(options, async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
+    const output = workspace.path("out.webp");
+    if (tool.flavor === "ffmpeg") {
+      await runTool(
+        tool.command,
+        [
+          "-y",
+          "-i",
+          input,
+          "-vf",
+          buildFfmpegResizeFilter(native.target, native.fit),
+          "-frames:v",
+          "1",
+          "-quality",
+          String(quality),
+          output,
+        ],
+        options,
+        native.signal,
+      );
+      return await workspace.read("out.webp");
+    }
+    const args = [
+      firstImageScene(tool, input),
+      ...convertResizeArgs(native),
+      "-quality",
+      String(quality),
+      output,
+    ];
+    if (native.autoOrient !== false) {
+      args.splice(1, 0, "-auto-orient");
+    }
+    await runConvertTool(tool, args, options, native.signal);
+    return await workspace.read("out.webp");
   });
 }
 
@@ -1699,7 +1918,7 @@ async function externalConvertToJpeg(
   backend: Exclude<ImageBackend, "photon">,
   buffer: Buffer,
   options: ResolvedOptions,
-  jpegOptions: { quality?: number; autoOrient?: boolean } = {},
+  jpegOptions: { quality?: number; autoOrient?: boolean; signal?: AbortSignal } = {},
 ): Promise<Buffer> {
   const tool = await resolveExternalTool(backend, options);
   if (!tool) {
@@ -1710,7 +1929,7 @@ async function externalConvertToJpeg(
   return await withImageTemp(options, async (workspace) => {
     const oriented =
       tool.flavor === "sips" && autoOrient
-        ? await sipsApplyOrientation(tool, buffer, options)
+        ? await sipsApplyOrientation(tool, buffer, options, jpegOptions.signal)
         : buffer;
     const input = await workspace.write("in.img", oriented);
     const output = workspace.path("out.jpg");
@@ -1719,6 +1938,7 @@ async function externalConvertToJpeg(
         tool.command,
         ["-s", "format", "jpeg", "-s", "formatOptions", String(quality), input, "--out", output],
         options,
+        jpegOptions.signal,
       );
     } else if (tool.flavor === "powershell") {
       throw new Error("Windows native image backend does not convert HEIC to JPEG");
@@ -1736,6 +1956,7 @@ async function externalConvertToJpeg(
           output,
         ],
         options,
+        jpegOptions.signal,
       );
     } else {
       const args = [firstImageScene(tool, input)];
@@ -1743,7 +1964,7 @@ async function externalConvertToJpeg(
         args.push("-auto-orient");
       }
       args.push("-quality", String(quality), output);
-      await runConvertTool(tool, args, options);
+      await runConvertTool(tool, args, options, jpegOptions.signal);
     }
     return await workspace.read("out.jpg");
   });
@@ -1752,7 +1973,7 @@ async function externalConvertToJpeg(
 function readRequiredEncodedMetadata(data: Buffer, format: EncodedImageFormat): ImageMetadata {
   const metadata = readImageMetadataFromHeader(data);
   if (!metadata) {
-    throw new Error(`Unable to read ${format} output dimensions`);
+    throw rastermillError("RASTERMILL_UNDECODABLE", `Unable to read ${format} output dimensions`);
   }
   return metadata;
 }
@@ -1765,6 +1986,17 @@ function encodedImage(data: Buffer, format: EncodedImageFormat): EncodedImage {
     width: metadata.width,
     height: metadata.height,
     bytes: data.length,
+  };
+}
+
+function nativeResizeOptions(
+  metadata: ImageMetadata,
+  resize: NormalizedResizeOptions,
+): Pick<NativeEncodeOptions, "target" | "scaledTarget" | "fit"> {
+  return {
+    target: finalDimensions(metadata, resize),
+    scaledTarget: scaledDimensions(metadata, resize),
+    fit: resize.fit,
   };
 }
 
@@ -1781,28 +2013,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
           return null;
         }
       }
-      if (options.backend !== "auto" && options.backend !== "photon") {
-        return null;
-      }
-      try {
-        const { image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels);
-        try {
-          const metadata = validatePixelBudget(
-            { width: image.get_width(), height: image.get_height() },
-            options.maxInputPixels,
-          );
-          return {
-            ...metadata,
-            format: "png",
-            hasAlpha: null,
-            orientation: null,
-          };
-        } finally {
-          image.free();
-        }
-      } catch {
-        return null;
-      }
+      return null;
     },
 
     async encode(input, encodeOptions) {
@@ -1817,9 +2028,6 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       assertOutputPixelBudget(orientedMetadata, resize, options.maxOutputPixels);
       return await runWithBackends(encodeOptions.format, options, async (backend) => {
         if (backend === "photon") {
-          if (encodeOptions.format !== "jpeg" && encodeOptions.format !== "png") {
-            throw new Error(`Photon cannot encode ${encodeOptions.format}`);
-          }
           const { photon, image } = await loadOrientedPhotonImage(
             buffer,
             options.maxInputPixels,
@@ -1833,43 +2041,71 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                 "jpeg",
               );
             }
-            return encodedImage(
-              encodePngRgba(
-                resized.get_raw_pixels(),
-                resized.get_width(),
-                resized.get_height(),
-                encodeOptions.png?.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
-              ),
-              "png",
-            );
+            if (encodeOptions.format === "webp") {
+              return encodedImage(Buffer.from(resized.get_bytes_webp()), "webp");
+            }
+            if (encodeOptions.format === "png") {
+              return encodedImage(
+                encodePngRgba(
+                  resized.get_raw_pixels(),
+                  resized.get_width(),
+                  resized.get_height(),
+                  encodeOptions.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
+                ),
+                "png",
+              );
+            }
           } finally {
             resized.free();
           }
         }
+        const nativeBackend = backend as Exclude<ImageBackend, "photon">;
         if (encodeOptions.format === "jpeg") {
           // No resize means a straight decode-and-encode (e.g. HEIC/AVIF to JPEG).
           const jpeg = encodeOptions.resize
             ? await externalToJpeg(
-                backend,
+                nativeBackend,
                 buffer,
                 {
-                  target: targetDimensions(orientedMetadata, resize),
+                  ...nativeResizeOptions(orientedMetadata, resize),
                   ...(encodeOptions.quality === undefined
                     ? {}
                     : { quality: encodeOptions.quality }),
                   ...(encodeOptions.autoOrient === undefined
                     ? {}
                     : { autoOrient: encodeOptions.autoOrient }),
+                  ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
                 },
                 options,
               )
-            : await externalConvertToJpeg(backend, buffer, options, {
+            : await externalConvertToJpeg(nativeBackend, buffer, options, {
                 ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
                 ...(encodeOptions.autoOrient === undefined
                   ? {}
                   : { autoOrient: encodeOptions.autoOrient }),
+                ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
               });
           return encodedImage(jpeg, "jpeg");
+        }
+        if (encodeOptions.format === "webp") {
+          if (backend === "imagemagick" || backend === "graphicsmagick" || backend === "ffmpeg") {
+            return encodedImage(
+              await externalToWebp(
+                backend,
+                buffer,
+                {
+                  ...nativeResizeOptions(orientedMetadata, resize),
+                  ...(encodeOptions.autoOrient === undefined
+                    ? {}
+                    : { autoOrient: encodeOptions.autoOrient }),
+                  ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+                },
+                options,
+              ),
+              "webp",
+            );
+          }
+          throw new Error(`Image backend ${backend} is not available for WebP encoding`);
         }
         if (
           backend === "windows-native" ||
@@ -1881,13 +2117,14 @@ function createProcessor(options: ResolvedOptions): Rastermill {
               backend,
               buffer,
               {
-                target: targetDimensions(orientedMetadata, resize),
-                ...(encodeOptions.png?.compressionLevel === undefined
+                ...nativeResizeOptions(orientedMetadata, resize),
+                ...(encodeOptions.compressionLevel === undefined
                   ? {}
-                  : { compressionLevel: encodeOptions.png.compressionLevel }),
+                  : { compressionLevel: encodeOptions.compressionLevel }),
                 ...(encodeOptions.autoOrient === undefined
                   ? {}
                   : { autoOrient: encodeOptions.autoOrient }),
+                ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
               },
               options,
             ),
@@ -1921,24 +2158,33 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       let smallest: EncodedImageWithinBytes | null = null;
       let firstEncodeError: unknown;
       for (const side of maxSides) {
-        for (const quality of encodeOptions.format === "jpeg"
-          ? qualities
-          : [encodeOptions.quality]) {
+        for (const quality of encodeOptions.format === "jpeg" ? qualities : [undefined]) {
           for (const compressionLevel of encodeOptions.format === "png"
             ? compressionLevels
-            : [encodeOptions.png?.compressionLevel]) {
+            : [undefined]) {
             try {
-              const out = await rastermill.encode(buffer, {
-                ...encodeOptions,
-                ...(quality === undefined ? {} : { quality }),
-                png: {
-                  ...encodeOptions.png,
-                  ...(compressionLevel === undefined ? {} : { compressionLevel }),
-                },
-                resize: { ...encodeOptions.resize, maxSide: side },
-              });
+              const nextResize = { ...encodeOptions.resize, maxSide: side };
+              const out =
+                encodeOptions.format === "jpeg"
+                  ? await rastermill.encode(buffer, {
+                      ...encodeOptions,
+                      ...(quality === undefined ? {} : { quality }),
+                      resize: nextResize,
+                    })
+                  : encodeOptions.format === "png"
+                    ? await rastermill.encode(buffer, {
+                        ...encodeOptions,
+                        ...(compressionLevel === undefined ? {} : { compressionLevel }),
+                        resize: nextResize,
+                      })
+                    : await rastermill.encode(buffer, {
+                        ...encodeOptions,
+                        resize: nextResize,
+                      });
+              const withinBudget = out.bytes <= maxBytes;
               const candidate = {
                 ...out,
+                withinBudget,
                 chosen: {
                   maxSide: side,
                   ...(quality === undefined ? {} : { quality }),
@@ -1948,7 +2194,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
               if (!smallest || candidate.bytes < smallest.bytes) {
                 smallest = candidate;
               }
-              if (candidate.bytes <= maxBytes) {
+              if (withinBudget) {
                 return candidate;
               }
             } catch (error) {
@@ -1963,7 +2209,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       if (firstEncodeError) {
         throw firstEncodeError;
       }
-      throw new Error("Failed to encode image within byte budget");
+      throw rastermillError("RASTERMILL_UNDECODABLE", "Failed to encode image within byte budget");
     },
   };
   return rastermill;
@@ -1973,19 +2219,24 @@ export function createRastermill(options: RastermillOptions = {}): Rastermill {
   return createProcessor(normalizeOptions(options));
 }
 
-const defaultRastermill = createRastermill();
+let defaultRastermill: Rastermill | null = null;
+
+function getDefaultRastermill(): Rastermill {
+  defaultRastermill ??= createRastermill();
+  return defaultRastermill;
+}
 
 export async function probe(input: ImageInput): Promise<ImageProbe | null> {
-  return await defaultRastermill.probe(input);
+  return await getDefaultRastermill().probe(input);
 }
 
 export async function encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage> {
-  return await defaultRastermill.encode(input, options);
+  return await getDefaultRastermill().encode(input, options);
 }
 
 export async function encodeWithinBytes(
   input: ImageInput,
   options: EncodeWithinBytesOptions,
 ): Promise<EncodedImageWithinBytes> {
-  return await defaultRastermill.encodeWithinBytes(input, options);
+  return await getDefaultRastermill().encodeWithinBytes(input, options);
 }

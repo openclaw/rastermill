@@ -28,7 +28,7 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 | [Configuration](./configuration.md) | `createRastermill`, options, pixel budgets, env vars, custom command resolution |
 | [Backends](./backends.md) | Backend selection order and automatic fallback |
 | [`probe`](./probe.md) | Read format, width/height, alpha, and orientation without decoding |
-| [`encode`](./encode.md) | Resize and re-encode to JPEG or PNG, including HEIC/AVIF → JPEG |
+| [`encode`](./encode.md) | Resize and re-encode to JPEG, PNG, or WebP, including HEIC/AVIF → JPEG |
 | [`encodeWithinBytes`](./encode-within-bytes.md) | Search size/quality/compression under a byte budget |
 | [Error handling](./error-handling.md) | `RastermillUnavailableError`, `isRastermillUnavailableError` |
 

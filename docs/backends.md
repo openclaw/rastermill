@@ -9,12 +9,12 @@ single backend.
 
 | Backend | Engine | Notes |
 | --- | --- | --- |
-| `photon` | In-process WASM ([Photon](https://github.com/silvia-odwyer/photon)) | Fast, no external process. Decodes PNG, JPEG, GIF, WebP. Cannot decode HEIC/AVIF. |
+| `photon` | In-process WASM ([Photon](https://github.com/silvia-odwyer/photon)) | Fast, no external process. Decodes PNG, JPEG, GIF, WebP. Encodes JPEG, PNG, WebP. Cannot decode HEIC/AVIF. |
 | `sips` | macOS `/usr/bin/sips` | macOS only. JPEG output (incl. HEIC/AVIF → JPEG); not used for PNG. |
 | `windows-native` | Windows PowerShell + `System.Drawing` | Windows only. JPEG and PNG; does not convert HEIC. |
 | `imagemagick` | `magick` (or `convert`) | Broad format support, including HEIC/AVIF where codecs are installed. |
 | `graphicsmagick` | `gm` | Similar coverage to ImageMagick. |
-| `ffmpeg` | `ffmpeg` | Used for JPEG output and HEIC→JPEG; not used for PNG. |
+| `ffmpeg` | `ffmpeg` | Used for JPEG/WebP output and HEIC→JPEG; not used for PNG. |
 
 ## Automatic order
 
@@ -33,6 +33,10 @@ and falls through to native):
 
 - Windows: `photon → windows-native → imagemagick → graphicsmagick`
 - everywhere else: `photon → imagemagick → graphicsmagick`
+
+`encode` to WebP:
+
+- all platforms: `photon → imagemagick → graphicsmagick → ffmpeg`
 
 ## How fallback works
 

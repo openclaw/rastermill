@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRastermill,
   encodePngRgba,
+  RastermillError,
   RastermillUnavailableError,
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
@@ -71,6 +72,7 @@ describe("Rastermill", () => {
       height: 8,
       hasAlpha: true,
       orientation: null,
+      bytes: image.length,
     });
   });
 
@@ -123,7 +125,7 @@ describe("Rastermill", () => {
     const png = await rastermill.encode(source, {
       format: "png",
       resize: { maxSide: 5 },
-      png: { compressionLevel: 9 },
+      compressionLevel: 9,
     });
 
     expect(png).toMatchObject({ format: "png", width: 5, height: 3 });
@@ -155,17 +157,34 @@ describe("Rastermill", () => {
     });
 
     expect(result.bytes).toBeLessThanOrEqual(700);
+    expect(result.withinBudget).toBe(true);
     expect(result.chosen.maxSide).toBeGreaterThan(0);
     expect(result.chosen.quality).toBeGreaterThan(0);
+  });
+
+  it("reports when byte-budget search returns the smallest oversized candidate", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(64, 64, 255);
+
+    const result = await rastermill.encodeWithinBytes(source, {
+      format: "png",
+      maxBytes: 1,
+      search: { maxSide: [16, 8], compressionLevel: [9] },
+    });
+
+    expect(result.bytes).toBeGreaterThan(1);
+    expect(result.withinBudget).toBe(false);
+    expect(result.chosen.maxSide).toBe(8);
   });
 
   it("rejects images over the configured pixel budget before decoding", async () => {
     const rastermill = createRastermill({ limits: { inputPixels: 100 } });
     const source = rgbaImage(20, 20);
 
-    await expect(
-      rastermill.encode(source, { format: "jpeg", resize: { maxSide: 8 } }),
-    ).rejects.toThrow("pixel input limit");
+    await expect(rastermill.encode(source, { format: "jpeg", resize: { maxSide: 8 } })).rejects
+      .toMatchObject({
+        code: "RASTERMILL_INPUT_TOO_LARGE",
+      });
   });
 
   it("rejects resize targets over the configured output pixel budget", async () => {
@@ -174,7 +193,18 @@ describe("Rastermill", () => {
 
     await expect(
       rastermill.encode(source, { format: "jpeg", resize: { maxSide: 100_000, enlarge: true } }),
-    ).rejects.toThrow("pixel output limit");
+    ).rejects.toMatchObject({ code: "RASTERMILL_OUTPUT_TOO_LARGE" });
+  });
+
+  it("uses typed errors for invalid options", async () => {
+    const rastermill = createRastermill();
+
+    await expect(
+      rastermill.encode(rgbaImage(8, 8), { format: "png", resize: { maxSide: 0 } }),
+    ).rejects.toBeInstanceOf(RastermillError);
+    await expect(
+      rastermill.encode(rgbaImage(8, 8), { format: "png", resize: { maxSide: 0 } }),
+    ).rejects.toMatchObject({ code: "RASTERMILL_BAD_OPTION" });
   });
 
   it("passes exact fill dimensions through to native backends", async () => {
@@ -218,12 +248,27 @@ describe("Rastermill", () => {
     }
   });
 
-  it("rejects cover resize until crop semantics are implemented", async () => {
+  it("center-crops cover resize requests", async () => {
     const rastermill = createRastermill();
 
-    await expect(
-      rastermill.encode(rgbaImage(8, 4), { format: "jpeg", resize: { fit: "cover", width: 4 } }),
-    ).rejects.toThrow("resize.fit cover is not supported yet");
+    const jpeg = await rastermill.encode(rgbaImage(8, 4), {
+      format: "jpeg",
+      resize: { fit: "cover", width: 4, height: 4 },
+    });
+
+    expect(jpeg).toMatchObject({ format: "jpeg", width: 4, height: 4 });
+  });
+
+  it("encodes WebP output", async () => {
+    const rastermill = createRastermill();
+
+    const webp = await rastermill.encode(rgbaImage(12, 6), {
+      format: "webp",
+      resize: { maxSide: 6 },
+    });
+
+    expect(webp).toMatchObject({ format: "webp", width: 6, height: 3 });
+    expect(readImageProbeFromHeader(webp.data)).toMatchObject({ format: "webp" });
   });
 
   it.runIf(process.platform === "darwin" && existsSync("/usr/bin/sips"))(
@@ -338,18 +383,25 @@ describe("Rastermill", () => {
   it("does not fall back to native tools after a real Photon processing error", async () => {
     vi.resetModules();
     vi.doMock("@silvia-odwyer/photon-node", () => {
-      const image = {
-        free: vi.fn(),
-        get_height: vi.fn(() => 4),
-        get_width: vi.fn(() => 4),
-      };
+      class MockPhotonImage {
+        static new_from_byteslice = vi.fn(() => new MockPhotonImage());
+        free(): void {}
+        get_bytes_webp(): Uint8Array {
+          return new Uint8Array();
+        }
+        get_height(): number {
+          return 4;
+        }
+        get_width(): number {
+          return 4;
+        }
+      }
       return {
-        PhotonImage: {
-          new_from_byteslice: vi.fn(() => image),
-        },
+        PhotonImage: MockPhotonImage,
         SamplingFilter: {
           Lanczos3: 1,
         },
+        crop: vi.fn(),
         resize: vi.fn(() => {
           throw new Error("corrupt image payload");
         }),

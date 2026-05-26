@@ -105,7 +105,8 @@ const rastermill = createRastermill({
 ## Module functions
 
 For one-off calls you can skip `createRastermill` and import the functions directly.
-They use a default `Rastermill` instance (`backend: "auto"`, 25 MP budgets):
+They lazily create a default `Rastermill` instance on first use (`backend:
+"auto"`, 25 MP budgets):
 
 ```ts
 import { probe, encode } from "rastermill";

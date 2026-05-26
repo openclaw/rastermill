@@ -35,5 +35,5 @@ throws on oversized or undecodable input. Unsupported internal formats such as
 HEIC/AVIF throw `RastermillUnavailableError` because Photon cannot decode them.
 
 `transparency` never spawns external tools today. If you create Rastermill with
-`execution: "external"` or pin an external backend, alpha-capable inputs throw
+`execution: "external"`, alpha-capable inputs throw
 `RastermillUnavailableError` instead of loading Photon.

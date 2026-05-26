@@ -15,13 +15,10 @@ export type ImageTransparency = {
     hasAlphaChannel: boolean;
     hasTransparentPixels: boolean;
 };
-export type ImageBackend = "photon" | "sips" | "windows-native" | "imagemagick" | "graphicsmagick" | "ffmpeg";
-export type ImageBackendPreference = ImageBackend | "auto";
 export type ImageExecutionMode = "auto" | "internal" | "external";
 export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
 export type TempPrefixResolver = () => string;
 export type RastermillOptions = {
-    backend?: ImageBackendPreference;
     execution?: ImageExecutionMode;
     limits?: {
         inputPixels?: number;
@@ -33,9 +30,6 @@ export type RastermillOptions = {
     };
     timeoutMs?: number;
     maxProcessBufferBytes?: number;
-    env?: {
-        backendVar?: string;
-    };
     commandResolver?: ImageCommandResolver;
 };
 export type ResizeFit = "inside" | "cover" | "fill";
@@ -85,11 +79,38 @@ export type EncodedImageWithinBytes = EncodedImage & {
         compressionLevel?: number;
     };
 };
+export type EncodeBestFormatOptions = {
+    format: "jpeg";
+    quality?: number;
+} | {
+    format: "png";
+    compressionLevel?: number;
+} | {
+    format: "webp";
+};
+export type EncodeBestTransparencyMode = "prefer" | "preserve" | "flatten";
+export type EncodeBestOptions = BaseEncodeOptions & {
+    opaque?: EncodeBestFormatOptions;
+    transparent?: EncodeBestFormatOptions;
+    maxBytes?: number;
+    search?: EncodeSearchOptions;
+    transparency?: EncodeBestTransparencyMode;
+};
+export type EncodedImageBest = EncodedImage & {
+    withinBudget?: boolean;
+    chosen: {
+        transparency: "preserved" | "flattened" | "not-present";
+        maxSide?: number;
+        quality?: number;
+        compressionLevel?: number;
+    };
+};
 export type Rastermill = {
     probe(input: ImageInput): Promise<ImageProbe | null>;
     transparency(input: ImageInput): Promise<ImageTransparency>;
     encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
     encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
+    encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
 };
 type ImageOperation = "encode" | "transparency";
 export type RastermillErrorCode = "RASTERMILL_INPUT_TOO_LARGE" | "RASTERMILL_OUTPUT_TOO_LARGE" | "RASTERMILL_BAD_OPTION" | "RASTERMILL_UNDECODABLE" | "RASTERMILL_IMAGE_PROCESSOR_UNAVAILABLE";
@@ -112,5 +133,6 @@ export declare function probe(input: ImageInput): Promise<ImageProbe | null>;
 export declare function transparency(input: ImageInput): Promise<ImageTransparency>;
 export declare function encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
 export declare function encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
+export declare function encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
 export {};
 //# sourceMappingURL=index.d.ts.map

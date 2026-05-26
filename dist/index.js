@@ -106,17 +106,13 @@ function validateTempPrefix(value) {
     return value;
 }
 function normalizeOptions(options) {
-    const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
-    const backend = normalizeBackendPreference(options.backend ?? process.env[backendVar]);
     const execution = normalizeExecutionMode(options.execution);
-    validateBackendExecution(backend, execution);
     const maxInputPixels = normalizePositiveInteger(options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS, "limits.inputPixels");
     const tempPrefix = options.temp?.prefix ?? DEFAULT_TEMP_PREFIX;
     if (typeof tempPrefix === "string") {
         validateTempPrefix(tempPrefix);
     }
     return {
-        backend,
         execution,
         maxInputPixels,
         maxOutputPixels: normalizePositiveInteger(options.limits?.outputPixels ?? maxInputPixels, "limits.outputPixels"),
@@ -149,42 +145,7 @@ function isInternalBackend(backend) {
     return backend === "photon";
 }
 function allowsInternalBackend(options) {
-    return options.execution !== "external" && (options.backend === "auto" || options.backend === "photon");
-}
-function validateBackendExecution(backend, execution) {
-    if (backend === "auto" || execution === "auto") {
-        return;
-    }
-    if (execution === "internal" && !isInternalBackend(backend)) {
-        throw rastermillError("RASTERMILL_BAD_OPTION", `backend ${backend} is external but execution is internal`);
-    }
-    if (execution === "external" && isInternalBackend(backend)) {
-        throw rastermillError("RASTERMILL_BAD_OPTION", `backend ${backend} is internal but execution is external`);
-    }
-}
-function normalizeBackendPreference(value) {
-    const normalized = value?.trim().toLowerCase();
-    switch (normalized) {
-        case "photon":
-        case "sips":
-        case "windows-native":
-        case "imagemagick":
-        case "graphicsmagick":
-        case "ffmpeg":
-            return normalized;
-        case "windows":
-        case "powershell":
-        case "system.drawing":
-        case "systemdrawing":
-            return "windows-native";
-        case "magick":
-        case "convert":
-            return "imagemagick";
-        case "gm":
-            return "graphicsmagick";
-        default:
-            return "auto";
-    }
+    return options.execution !== "external";
 }
 function normalizeMetadata(width, height) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
@@ -1052,20 +1013,18 @@ export function encodePngRgba(pixels, width, height, compressionLevel = 6) {
         pngChunk("IEND", Buffer.alloc(0)),
     ]);
 }
-function backendsForFormat(format, preference, execution) {
-    const candidates = preference !== "auto"
-        ? [preference]
-        : format === "webp"
-            ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
-            : format === "png"
-                ? process.platform === "win32"
-                    ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
-                    : ["photon", "imagemagick", "graphicsmagick"]
-                : process.platform === "darwin"
-                    ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
-                    : process.platform === "win32"
-                        ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
-                        : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+function backendsForFormat(format, execution) {
+    const candidates = format === "webp"
+        ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
+        : format === "png"
+            ? process.platform === "win32"
+                ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
+                : ["photon", "imagemagick", "graphicsmagick"]
+            : process.platform === "darwin"
+                ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
+                : process.platform === "win32"
+                    ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
+                    : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
     if (execution === "internal") {
         return candidates.filter(isInternalBackend);
     }
@@ -1106,7 +1065,7 @@ function isBackendUnavailable(error) {
 }
 async function runWithBackends(format, options, fn) {
     const errors = [];
-    const backends = backendsForFormat(format, options.backend, options.execution);
+    const backends = backendsForFormat(format, options.execution);
     for (const backend of backends) {
         try {
             return await fn(backend);
@@ -1572,6 +1531,75 @@ function encodedImage(data, format) {
         bytes: data.length,
     };
 }
+function hasExplicitEncodeWork(format, options) {
+    if (format === "jpeg") {
+        return options.format === "jpeg" && options.quality !== undefined;
+    }
+    if (format === "png") {
+        return options.format === "png" && options.compressionLevel !== undefined;
+    }
+    return false;
+}
+function canReuseInputEncoding(buffer, format, header, resize, options) {
+    if (!header || header.format !== format || hasExplicitEncodeWork(format, options)) {
+        return false;
+    }
+    const autoOrient = options.autoOrient !== false;
+    if (autoOrient && header.orientation !== null && header.orientation !== 1) {
+        return false;
+    }
+    const target = finalDimensions(autoOrientedMetadata(buffer, header, autoOrient), resize);
+    return target.width === header.width && target.height === header.height;
+}
+function encodeBestOptions(options) {
+    return {
+        ...options,
+        opaque: options?.opaque ?? { format: "jpeg" },
+        transparent: options?.transparent ?? { format: "png" },
+        transparency: options?.transparency ?? "prefer",
+    };
+}
+function encodeBestFormatOptions(formatOptions, options) {
+    return {
+        ...formatOptions,
+        ...(options.resize === undefined ? {} : { resize: options.resize }),
+        ...(options.autoOrient === undefined ? {} : { autoOrient: options.autoOrient }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+    };
+}
+function encodeBestWithinBytesOptions(formatOptions, options) {
+    return {
+        ...encodeBestFormatOptions(formatOptions, options),
+        maxBytes: options.maxBytes,
+        ...(options.search === undefined ? {} : { search: options.search }),
+    };
+}
+async function imageHasAlphaChannel(rastermill, buffer, header) {
+    if (header?.hasAlpha === false) {
+        return false;
+    }
+    try {
+        return (await rastermill.transparency(buffer)).hasAlphaChannel;
+    }
+    catch (error) {
+        if (isRastermillUnavailableError(error) && header?.hasAlpha === true) {
+            return true;
+        }
+        throw error;
+    }
+}
+function bestChosen(out, transparency) {
+    const withinBudget = "withinBudget" in out ? { withinBudget: out.withinBudget } : {};
+    const search = "chosen" in out ? out.chosen : {};
+    return {
+        ...out,
+        ...withinBudget,
+        chosen: {
+            transparency,
+            ...search,
+        },
+    };
+}
 function nativeResizeOptions(metadata, resize) {
     return {
         target: finalDimensions(metadata, resize),
@@ -1626,10 +1654,14 @@ function createProcessor(options) {
         },
         async encode(input, encodeOptions) {
             const buffer = toBuffer(input);
+            const header = readImageProbeFromHeader(buffer);
             const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
             const orientedMetadata = autoOrientedMetadata(buffer, metadata, encodeOptions.autoOrient !== false);
             const resize = normalizeResizeOptions(encodeOptions.resize, orientedMetadata);
             assertOutputPixelBudget(orientedMetadata, resize, options.maxOutputPixels);
+            if (canReuseInputEncoding(buffer, encodeOptions.format, header, resize, encodeOptions)) {
+                return encodedImage(buffer, encodeOptions.format);
+            }
             return await runWithBackends(encodeOptions.format, options, async (backend) => {
                 if (backend === "photon") {
                     const { photon, image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels, encodeOptions.autoOrient !== false);
@@ -1776,6 +1808,38 @@ function createProcessor(options) {
             }
             throw rastermillError("RASTERMILL_UNDECODABLE", "Failed to encode image within byte budget");
         },
+        async encodeBest(input, rawOptions = {}) {
+            const buffer = toBuffer(input);
+            const encodeOptions = encodeBestOptions(rawOptions);
+            const header = readImageProbeFromHeader(buffer);
+            const hasAlpha = encodeOptions.transparency === "flatten"
+                ? false
+                : await imageHasAlphaChannel(rastermill, buffer, header);
+            const useTransparent = hasAlpha && encodeOptions.transparency !== "flatten";
+            const firstFormat = useTransparent ? encodeOptions.transparent : encodeOptions.opaque;
+            const firstTransparency = useTransparent
+                ? "preserved"
+                : hasAlpha
+                    ? "flattened"
+                    : "not-present";
+            if (encodeOptions.maxBytes === undefined) {
+                const out = await rastermill.encode(buffer, encodeBestFormatOptions(firstFormat, encodeOptions));
+                return bestChosen(out, firstTransparency);
+            }
+            const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
+            const first = await rastermill.encodeWithinBytes(buffer, encodeBestWithinBytesOptions(firstFormat, {
+                ...encodeOptions,
+                maxBytes,
+            }));
+            if (!useTransparent || first.withinBudget || encodeOptions.transparency === "preserve") {
+                return bestChosen(first, firstTransparency);
+            }
+            const flattened = await rastermill.encodeWithinBytes(buffer, encodeBestWithinBytesOptions(encodeOptions.opaque, {
+                ...encodeOptions,
+                maxBytes,
+            }));
+            return bestChosen(flattened, hasAlpha ? "flattened" : "not-present");
+        },
     };
     return rastermill;
 }
@@ -1798,5 +1862,8 @@ export async function encode(input, options) {
 }
 export async function encodeWithinBytes(input, options) {
     return await getDefaultRastermill().encodeWithinBytes(input, options);
+}
+export async function encodeBest(input, options) {
+    return await getDefaultRastermill().encodeBest(input, options);
 }
 //# sourceMappingURL=index.js.map

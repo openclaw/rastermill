@@ -66,6 +66,39 @@ type ResizeOptions = {
 
 By default the image is never enlarged; set `enlarge: true` to allow upscaling.
 
+## `encodeBest`
+
+Use `encodeBest` when the caller wants Rastermill to choose the output path
+based on transparency:
+
+```ts
+const out = await rastermill.encodeBest(input, {
+  resize: { maxSide: 1600 },
+  opaque: { format: "jpeg", quality: 85 },
+  transparent: { format: "png", compressionLevel: 9 },
+  maxBytes: 500_000,
+  search: {
+    maxSide: [1600, 1280, 1024],
+    quality: [85, 75, 65],
+    compressionLevel: [9, 8, 7],
+  },
+  transparency: "prefer",
+});
+// => { data, format, width, height, bytes, withinBudget?, chosen }
+```
+
+`transparency` controls alpha handling:
+
+- **`prefer`** (default) preserves alpha first, then flattens to the opaque
+  output if a transparent result cannot fit `maxBytes`.
+- **`preserve`** never flattens alpha. If no transparent candidate fits, the
+  result is the smallest transparent candidate with `withinBudget: false`.
+- **`flatten`** always uses the opaque output.
+
+If `maxBytes` is omitted, `encodeBest` does a single encode. If `maxBytes` is
+present, it uses the same search semantics as
+[`encodeWithinBytes`](./encode-within-bytes.md).
+
 ## Format conversion (HEIC/AVIF → JPEG)
 
 There is no separate convert method. Decode-and-encode is just `encode` with no
@@ -75,9 +108,9 @@ resize:
 const jpeg = await rastermill.encode(heicBuffer, { format: "jpeg" });
 ```
 
-Photon can't decode HEIC/AVIF, so with `backend: "auto"` Rastermill falls through
-to a native tool (`sips`, ImageMagick, GraphicsMagick, or ffmpeg). If none is
-available you get a [`RastermillUnavailableError`](./error-handling.md).
+Photon can't decode HEIC/AVIF, so `execution: "auto"` falls through to a native
+tool (`sips`, ImageMagick, GraphicsMagick, or ffmpeg). If none is available you
+get a [`RastermillUnavailableError`](./error-handling.md).
 
 ## Orientation
 

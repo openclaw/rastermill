@@ -5,8 +5,7 @@ that uses both. `execution: "auto"` is the default: it uses Photon for common
 formats and falls through to external tools for codecs Photon does not support.
 
 Use `execution: "internal"` to forbid child processes. Use
-`execution: "external"` when you explicitly want native tool behavior. Advanced
-callers can still pin a single backend with `backend`.
+`execution: "external"` when you explicitly want native tool behavior.
 
 ## Available backends
 
@@ -21,9 +20,9 @@ callers can still pin a single backend with `backend`.
 
 ## Automatic order
 
-When `execution: "auto"` and `backend: "auto"`, the candidate list depends on
-the output format and the platform. Photon is tried first whenever it can handle
-the format, then native tools fill the gaps.
+When `execution: "auto"`, the candidate list depends on the output format and
+the platform. Photon is tried first whenever it can handle the format, then
+native tools fill the gaps.
 
 `encode` to JPEG (this also covers HEIC/AVIF → JPEG, where Photon fails to decode
 and falls through to native):
@@ -65,15 +64,3 @@ createRastermill({ execution: "external" }); // native tools only
 `execution: "internal"` currently supports PNG, JPEG, GIF, and WebP input through
 Photon. It cannot decode HEIC/AVIF, so those operations fail with
 `RastermillUnavailableError` instead of spawning `sips`, ImageMagick, or ffmpeg.
-
-## Forcing a backend
-
-Pass `backend` to `createRastermill` (or set the env var — see
-[Configuration](./configuration.md)) to pin one:
-
-```ts
-const rastermill = createRastermill({ backend: "imagemagick" });
-```
-
-When pinned, Rastermill uses only that backend and does not fall back. If it's
-unavailable for the operation, you get a `RastermillUnavailableError`.

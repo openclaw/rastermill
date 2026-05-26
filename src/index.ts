@@ -32,7 +32,7 @@ export type ImageTransparency = {
   hasTransparentPixels: boolean;
 };
 
-export type ImageBackend =
+type ImageBackend =
   | "photon"
   | "sips"
   | "windows-native"
@@ -40,13 +40,11 @@ export type ImageBackend =
   | "graphicsmagick"
   | "ffmpeg";
 
-export type ImageBackendPreference = ImageBackend | "auto";
 export type ImageExecutionMode = "auto" | "internal" | "external";
 export type ImageCommandResolver = (command: string) => string | null | Promise<string | null>;
 export type TempPrefixResolver = () => string;
 
 export type RastermillOptions = {
-  backend?: ImageBackendPreference;
   execution?: ImageExecutionMode;
   limits?: {
     inputPixels?: number;
@@ -58,14 +56,10 @@ export type RastermillOptions = {
   };
   timeoutMs?: number;
   maxProcessBufferBytes?: number;
-  env?: {
-    backendVar?: string;
-  };
   commandResolver?: ImageCommandResolver;
 };
 
 type ResolvedOptions = {
-  backend: ImageBackendPreference;
   execution: ImageExecutionMode;
   maxInputPixels: number;
   maxOutputPixels: number;
@@ -134,6 +128,39 @@ export type EncodedImageWithinBytes = EncodedImage & {
   };
 };
 
+export type EncodeBestFormatOptions =
+  | {
+      format: "jpeg";
+      quality?: number;
+    }
+  | {
+      format: "png";
+      compressionLevel?: number;
+    }
+  | {
+      format: "webp";
+    };
+
+export type EncodeBestTransparencyMode = "prefer" | "preserve" | "flatten";
+
+export type EncodeBestOptions = BaseEncodeOptions & {
+  opaque?: EncodeBestFormatOptions;
+  transparent?: EncodeBestFormatOptions;
+  maxBytes?: number;
+  search?: EncodeSearchOptions;
+  transparency?: EncodeBestTransparencyMode;
+};
+
+export type EncodedImageBest = EncodedImage & {
+  withinBudget?: boolean;
+  chosen: {
+    transparency: "preserved" | "flattened" | "not-present";
+    maxSide?: number;
+    quality?: number;
+    compressionLevel?: number;
+  };
+};
+
 type NativeEncodeOptions = {
   target: ImageMetadata;
   scaledTarget: ImageMetadata;
@@ -152,6 +179,7 @@ export type Rastermill = {
     input: ImageInput,
     options: EncodeWithinBytesOptions,
   ): Promise<EncodedImageWithinBytes>;
+  encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
 };
 
 type ImageOperation = "encode" | "transparency";
@@ -291,10 +319,7 @@ function validateTempPrefix(value: string): string {
 }
 
 function normalizeOptions(options: RastermillOptions): ResolvedOptions {
-  const backendVar = options.env?.backendVar ?? "RASTERMILL_IMAGE_BACKEND";
-  const backend = normalizeBackendPreference(options.backend ?? process.env[backendVar]);
   const execution = normalizeExecutionMode(options.execution);
-  validateBackendExecution(backend, execution);
   const maxInputPixels = normalizePositiveInteger(
     options.limits?.inputPixels ?? DEFAULT_MAX_INPUT_PIXELS,
     "limits.inputPixels",
@@ -304,7 +329,6 @@ function normalizeOptions(options: RastermillOptions): ResolvedOptions {
     validateTempPrefix(tempPrefix);
   }
   return {
-    backend,
     execution,
     maxInputPixels,
     maxOutputPixels: normalizePositiveInteger(
@@ -348,54 +372,8 @@ function isInternalBackend(backend: ImageBackend): boolean {
   return backend === "photon";
 }
 
-function allowsInternalBackend(options: Pick<ResolvedOptions, "backend" | "execution">): boolean {
-  return options.execution !== "external" && (options.backend === "auto" || options.backend === "photon");
-}
-
-function validateBackendExecution(
-  backend: ImageBackendPreference,
-  execution: ImageExecutionMode,
-): void {
-  if (backend === "auto" || execution === "auto") {
-    return;
-  }
-  if (execution === "internal" && !isInternalBackend(backend)) {
-    throw rastermillError(
-      "RASTERMILL_BAD_OPTION",
-      `backend ${backend} is external but execution is internal`,
-    );
-  }
-  if (execution === "external" && isInternalBackend(backend)) {
-    throw rastermillError(
-      "RASTERMILL_BAD_OPTION",
-      `backend ${backend} is internal but execution is external`,
-    );
-  }
-}
-
-function normalizeBackendPreference(value: string | undefined): ImageBackendPreference {
-  const normalized = value?.trim().toLowerCase();
-  switch (normalized) {
-    case "photon":
-    case "sips":
-    case "windows-native":
-    case "imagemagick":
-    case "graphicsmagick":
-    case "ffmpeg":
-      return normalized;
-    case "windows":
-    case "powershell":
-    case "system.drawing":
-    case "systemdrawing":
-      return "windows-native";
-    case "magick":
-    case "convert":
-      return "imagemagick";
-    case "gm":
-      return "graphicsmagick";
-    default:
-      return "auto";
-  }
+function allowsInternalBackend(options: Pick<ResolvedOptions, "execution">): boolean {
+  return options.execution !== "external";
 }
 
 function normalizeMetadata(width: number, height: number): ImageMetadata | null {
@@ -1451,25 +1429,19 @@ export function encodePngRgba(
   ]);
 }
 
-function backendsForFormat(
-  format: EncodedImageFormat,
-  preference: ImageBackendPreference,
-  execution: ImageExecutionMode,
-): ImageBackend[] {
+function backendsForFormat(format: EncodedImageFormat, execution: ImageExecutionMode): ImageBackend[] {
   const candidates: ImageBackend[] =
-    preference !== "auto"
-      ? [preference]
-      : format === "webp"
-        ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
-        : format === "png"
-          ? process.platform === "win32"
-            ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
-            : ["photon", "imagemagick", "graphicsmagick"]
-          : process.platform === "darwin"
-            ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
-            : process.platform === "win32"
-              ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
-              : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+    format === "webp"
+      ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
+      : format === "png"
+        ? process.platform === "win32"
+          ? ["photon", "windows-native", "imagemagick", "graphicsmagick"]
+          : ["photon", "imagemagick", "graphicsmagick"]
+        : process.platform === "darwin"
+          ? ["photon", "sips", "imagemagick", "graphicsmagick", "ffmpeg"]
+          : process.platform === "win32"
+            ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
+            : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
   if (execution === "internal") {
     return candidates.filter(isInternalBackend);
   }
@@ -1518,7 +1490,7 @@ async function runWithBackends<T>(
   fn: (backend: ImageBackend) => Promise<T>,
 ): Promise<T> {
   const errors: unknown[] = [];
-  const backends = backendsForFormat(format, options.backend, options.execution);
+  const backends = backendsForFormat(format, options.execution);
   for (const backend of backends) {
     try {
       return await fn(backend);
@@ -2100,6 +2072,104 @@ function encodedImage(data: Buffer, format: EncodedImageFormat): EncodedImage {
   };
 }
 
+function hasExplicitEncodeWork(format: EncodedImageFormat, options: EncodeOptions): boolean {
+  if (format === "jpeg") {
+    return options.format === "jpeg" && options.quality !== undefined;
+  }
+  if (format === "png") {
+    return options.format === "png" && options.compressionLevel !== undefined;
+  }
+  return false;
+}
+
+function canReuseInputEncoding(
+  buffer: Buffer,
+  format: EncodedImageFormat,
+  header: ImageProbe | null,
+  resize: NormalizedResizeOptions,
+  options: EncodeOptions,
+): boolean {
+  if (!header || header.format !== format || hasExplicitEncodeWork(format, options)) {
+    return false;
+  }
+  const autoOrient = options.autoOrient !== false;
+  if (autoOrient && header.orientation !== null && header.orientation !== 1) {
+    return false;
+  }
+  const target = finalDimensions(autoOrientedMetadata(buffer, header, autoOrient), resize);
+  return target.width === header.width && target.height === header.height;
+}
+
+function encodeBestOptions(options: EncodeBestOptions | undefined): Required<
+  Pick<EncodeBestOptions, "opaque" | "transparent" | "transparency">
+> &
+  Omit<EncodeBestOptions, "opaque" | "transparent" | "transparency"> {
+  return {
+    ...options,
+    opaque: options?.opaque ?? { format: "jpeg" },
+    transparent: options?.transparent ?? { format: "png" },
+    transparency: options?.transparency ?? "prefer",
+  };
+}
+
+function encodeBestFormatOptions(
+  formatOptions: EncodeBestFormatOptions,
+  options: EncodeBestOptions,
+): EncodeOptions {
+  return {
+    ...formatOptions,
+    ...(options.resize === undefined ? {} : { resize: options.resize }),
+    ...(options.autoOrient === undefined ? {} : { autoOrient: options.autoOrient }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  };
+}
+
+function encodeBestWithinBytesOptions(
+  formatOptions: EncodeBestFormatOptions,
+  options: EncodeBestOptions & { maxBytes: number },
+): EncodeWithinBytesOptions {
+  return {
+    ...encodeBestFormatOptions(formatOptions, options),
+    maxBytes: options.maxBytes,
+    ...(options.search === undefined ? {} : { search: options.search }),
+  };
+}
+
+async function imageHasAlphaChannel(
+  rastermill: Rastermill,
+  buffer: Buffer,
+  header: ImageProbe | null,
+): Promise<boolean> {
+  if (header?.hasAlpha === false) {
+    return false;
+  }
+  try {
+    return (await rastermill.transparency(buffer)).hasAlphaChannel;
+  } catch (error) {
+    if (isRastermillUnavailableError(error) && header?.hasAlpha === true) {
+      return true;
+    }
+    throw error;
+  }
+}
+
+function bestChosen(
+  out: EncodedImage | EncodedImageWithinBytes,
+  transparency: EncodedImageBest["chosen"]["transparency"],
+): EncodedImageBest {
+  const withinBudget =
+    "withinBudget" in out ? { withinBudget: out.withinBudget } : {};
+  const search = "chosen" in out ? out.chosen : {};
+  return {
+    ...out,
+    ...withinBudget,
+    chosen: {
+      transparency,
+      ...search,
+    },
+  };
+}
+
 function nativeResizeOptions(
   metadata: ImageMetadata,
   resize: NormalizedResizeOptions,
@@ -2168,6 +2238,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
 
     async encode(input, encodeOptions) {
       const buffer = toBuffer(input);
+      const header = readImageProbeFromHeader(buffer);
       const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
       const orientedMetadata = autoOrientedMetadata(
         buffer,
@@ -2176,6 +2247,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       );
       const resize = normalizeResizeOptions(encodeOptions.resize, orientedMetadata);
       assertOutputPixelBudget(orientedMetadata, resize, options.maxOutputPixels);
+      if (canReuseInputEncoding(buffer, encodeOptions.format, header, resize, encodeOptions)) {
+        return encodedImage(buffer, encodeOptions.format);
+      }
       return await runWithBackends(encodeOptions.format, options, async (backend) => {
         if (backend === "photon") {
           const { photon, image } = await loadOrientedPhotonImage(
@@ -2361,6 +2435,51 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       }
       throw rastermillError("RASTERMILL_UNDECODABLE", "Failed to encode image within byte budget");
     },
+
+    async encodeBest(input, rawOptions = {}) {
+      const buffer = toBuffer(input);
+      const encodeOptions = encodeBestOptions(rawOptions);
+      const header = readImageProbeFromHeader(buffer);
+      const hasAlpha =
+        encodeOptions.transparency === "flatten"
+          ? false
+          : await imageHasAlphaChannel(rastermill, buffer, header);
+      const useTransparent = hasAlpha && encodeOptions.transparency !== "flatten";
+      const firstFormat = useTransparent ? encodeOptions.transparent : encodeOptions.opaque;
+      const firstTransparency = useTransparent
+        ? "preserved"
+        : hasAlpha
+          ? "flattened"
+          : "not-present";
+
+      if (encodeOptions.maxBytes === undefined) {
+        const out = await rastermill.encode(
+          buffer,
+          encodeBestFormatOptions(firstFormat, encodeOptions),
+        );
+        return bestChosen(out, firstTransparency);
+      }
+
+      const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
+      const first = await rastermill.encodeWithinBytes(
+        buffer,
+        encodeBestWithinBytesOptions(firstFormat, {
+          ...encodeOptions,
+          maxBytes,
+        }),
+      );
+      if (!useTransparent || first.withinBudget || encodeOptions.transparency === "preserve") {
+        return bestChosen(first, firstTransparency);
+      }
+      const flattened = await rastermill.encodeWithinBytes(
+        buffer,
+        encodeBestWithinBytesOptions(encodeOptions.opaque, {
+          ...encodeOptions,
+          maxBytes,
+        }),
+      );
+      return bestChosen(flattened, hasAlpha ? "flattened" : "not-present");
+    },
   };
   return rastermill;
 }
@@ -2393,4 +2512,11 @@ export async function encodeWithinBytes(
   options: EncodeWithinBytesOptions,
 ): Promise<EncodedImageWithinBytes> {
   return await getDefaultRastermill().encodeWithinBytes(input, options);
+}
+
+export async function encodeBest(
+  input: ImageInput,
+  options?: EncodeBestOptions,
+): Promise<EncodedImageBest> {
+  return await getDefaultRastermill().encodeBest(input, options);
 }

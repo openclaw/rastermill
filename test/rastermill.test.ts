@@ -2,6 +2,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createRastermill,
@@ -36,6 +37,68 @@ function losslessWebpHeader(width: number, height: number, hasAlpha: boolean): B
   buffer.writeUInt32LE(payload.length, 16);
   payload.copy(buffer, 20);
   return buffer;
+}
+
+function isoBox(type: string, payload: Buffer): Buffer {
+  const box = Buffer.alloc(8 + payload.length);
+  box.writeUInt32BE(box.length, 0);
+  box.write(type, 4, "ascii");
+  payload.copy(box, 8);
+  return box;
+}
+
+function heifLikeImage(...sizes: Array<{ width: number; height: number }>): Buffer {
+  const ftypPayload = Buffer.alloc(8);
+  ftypPayload.write("heic", 0, "ascii");
+  const ispeBoxes = sizes.map(({ width, height }) => {
+    const ispePayload = Buffer.alloc(12);
+    ispePayload.writeUInt32BE(width, 4);
+    ispePayload.writeUInt32BE(height, 8);
+    return isoBox("ispe", ispePayload);
+  });
+  const ipco = isoBox("ipco", Buffer.concat(ispeBoxes));
+  const iprp = isoBox("iprp", ipco);
+  const meta = isoBox("meta", Buffer.concat([Buffer.alloc(4), iprp]));
+  return Buffer.concat([isoBox("ftyp", ftypPayload), meta]);
+}
+
+function bmpHeader(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(26);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(height, 22);
+  return buffer;
+}
+
+function grayscaleAlphaPng(width: number, height: number, alpha = 128): Buffer {
+  const raw = Buffer.alloc((width * 2 + 1) * height);
+  for (let row = 0; row < height; row += 1) {
+    raw[row * (width * 2 + 1)] = 0;
+    for (let col = 0; col < width; col += 1) {
+      const offset = row * (width * 2 + 1) + 1 + col * 2;
+      raw[offset] = 0x80;
+      raw[offset + 1] = alpha;
+    }
+  }
+  const pngChunk = (type: string, data: Buffer) => {
+    const typeBuffer = Buffer.from(type, "ascii");
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length, 0);
+    const crc = Buffer.alloc(4);
+    return Buffer.concat([length, typeBuffer, data, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 4;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
 }
 
 function tiffImageFileDirectories(
@@ -103,6 +166,19 @@ describe("Rastermill", () => {
     });
   });
 
+  it("reads BMP and HEIF dimensions from headers without decoding", () => {
+    expect(readImageProbeFromHeader(bmpHeader(640, 480))).toMatchObject({
+      format: "bmp",
+      width: 640,
+      height: 480,
+    });
+    expect(readImageProbeFromHeader(heifLikeImage({ width: 640, height: 480 }))).toMatchObject({
+      format: "heif",
+      width: 640,
+      height: 480,
+    });
+  });
+
   it("probes within the pixel budget and returns null when over budget", async () => {
     const rastermill = createRastermill({ limits: { inputPixels: 100 } });
 
@@ -167,6 +243,15 @@ describe("Rastermill", () => {
       hasTransparentPixels: false,
     });
     await expect(rastermill.transparency(rgbaImage(1, 1, 64))).resolves.toEqual({
+      hasAlphaChannel: true,
+      hasTransparentPixels: true,
+    });
+  });
+
+  it("detects grayscale alpha PNG channels through Photon fallback", async () => {
+    const rastermill = createRastermill();
+
+    await expect(rastermill.transparency(grayscaleAlphaPng(2, 2))).resolves.toEqual({
       hasAlphaChannel: true,
       hasTransparentPixels: true,
     });
@@ -257,6 +342,54 @@ describe("Rastermill", () => {
     expect(result.chosen.maxSide).toBe(8);
   });
 
+  it("chooses transparent output first and flattens when needed for a byte budget", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(64, 64, 120);
+
+    const result = await rastermill.encodeBest(source, {
+      maxBytes: 1,
+      search: {
+        maxSide: [32, 16],
+        quality: [80, 50],
+        compressionLevel: [9],
+      },
+    });
+
+    expect(result.format).toBe("jpeg");
+    expect(result.chosen.transparency).toBe("flattened");
+    expect(result.chosen.quality).toBeGreaterThan(0);
+  });
+
+  it("preserves transparent output when flattening is disabled", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(64, 64, 120);
+
+    const result = await rastermill.encodeBest(source, {
+      maxBytes: 1,
+      search: { maxSide: [16], compressionLevel: [9] },
+      transparency: "preserve",
+    });
+
+    expect(result.format).toBe("png");
+    expect(result.withinBudget).toBe(false);
+    expect(result.chosen.transparency).toBe("preserved");
+  });
+
+  it("reuses matching input bytes without loading Photon when no encode work is needed", async () => {
+    vi.resetModules();
+    vi.doMock("@silvia-odwyer/photon-node", () => {
+      throw new Error("Photon should not be imported for no-op encodes");
+    });
+    const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+      await import("../src/index.js");
+    const source = encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4);
+
+    const result = await createFreshRastermill().encode(source, { format: "png" });
+
+    expect(result).toMatchObject({ format: "png", width: 4, height: 4, bytes: source.length });
+    expect(result.data.equals(source)).toBe(true);
+  });
+
   it("rejects images over the configured pixel budget before decoding", async () => {
     const rastermill = createRastermill({ limits: { inputPixels: 100 } });
     const source = rgbaImage(20, 20);
@@ -265,6 +398,41 @@ describe("Rastermill", () => {
       .toMatchObject({
         code: "RASTERMILL_INPUT_TOO_LARGE",
       });
+  });
+
+  it("rejects oversized ISO BMFF inputs before native tools run", async () => {
+    const requested: string[] = [];
+    const rastermill = createRastermill({
+      limits: { inputPixels: 100 },
+      commandResolver: (command) => {
+        requested.push(command);
+        return command;
+      },
+    });
+    const source = heifLikeImage({ width: 8, height: 8 }, { width: 20, height: 20 });
+
+    await expect(rastermill.probe(source)).resolves.toBeNull();
+    await expect(rastermill.encode(source, { format: "jpeg", resize: { maxSide: 8 } })).rejects
+      .toMatchObject({
+        code: "RASTERMILL_INPUT_TOO_LARGE",
+      });
+    expect(requested).toEqual([]);
+  });
+
+  it("rejects unknown input before native tools run", async () => {
+    const requested: string[] = [];
+    const rastermill = createRastermill({
+      commandResolver: (command) => {
+        requested.push(command);
+        return command;
+      },
+    });
+
+    await expect(rastermill.encode(Buffer.from("not-an-image"), { format: "jpeg" })).rejects
+      .toMatchObject({
+        code: "RASTERMILL_UNDECODABLE",
+      });
+    expect(requested).toEqual([]);
   });
 
   it("rejects resize targets over the configured output pixel budget", async () => {
@@ -285,9 +453,7 @@ describe("Rastermill", () => {
     await expect(
       rastermill.encode(rgbaImage(8, 8), { format: "png", resize: { maxSide: 0 } }),
     ).rejects.toMatchObject({ code: "RASTERMILL_BAD_OPTION" });
-    expect(() => createRastermill({ backend: "photon", execution: "external" })).toThrow(
-      /execution is external/,
-    );
+    expect(() => createRastermill({ execution: "sideways" as never })).toThrow(/execution/);
   });
 
   it("passes exact fill dimensions through to native backends", async () => {
@@ -309,7 +475,7 @@ describe("Rastermill", () => {
       );
       await chmod(script, 0o755);
       const rastermill = createRastermill({
-        backend: "imagemagick",
+        execution: "external",
         temp: { rootDir: tempRoot, prefix: "custom-img-" },
         commandResolver: (command) => (command === "magick" ? script : null),
       });
@@ -355,9 +521,9 @@ describe("Rastermill", () => {
   });
 
   it.runIf(process.platform === "darwin" && existsSync("/usr/bin/sips"))(
-    "encodes through the native sips backend",
+    "encodes through native tools when execution is external",
     async () => {
-      const rastermill = createRastermill({ backend: "sips" });
+      const rastermill = createRastermill({ execution: "external" });
 
       const jpeg = await rastermill.encode(rgbaImage(16, 8), {
         format: "jpeg",
@@ -387,12 +553,15 @@ describe("Rastermill", () => {
     expect(readImageMetadataFromHeader(source)).toBeNull();
   });
 
-  it("reports unavailable forced backends with structured errors", async () => {
-    const rastermill = createRastermill({ backend: "ffmpeg" });
+  it("reports unavailable external processing with structured errors", async () => {
+    const rastermill = createRastermill({
+      execution: "external",
+      commandResolver: () => null,
+    });
     const source = rgbaImage(4, 4);
 
     await expect(
-      rastermill.encode(source, { format: "png", resize: { maxSide: 4 } }),
+      rastermill.encode(source, { format: "png", resize: { maxSide: 2 } }),
     ).rejects.toBeInstanceOf(RastermillUnavailableError);
   });
 
@@ -441,7 +610,7 @@ describe("Rastermill", () => {
   it("resolves native fallback commands through the injected resolver", async () => {
     const requested: string[] = [];
     const rastermill = createRastermill({
-      backend: "imagemagick",
+      execution: "external",
       commandResolver: (command) => {
         requested.push(command);
         return null;
@@ -451,15 +620,21 @@ describe("Rastermill", () => {
     await expect(
       rastermill.encode(rgbaImage(4, 4), { format: "jpeg", resize: { maxSide: 4 } }),
     ).rejects.toBeInstanceOf(RastermillUnavailableError);
-    expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
+    expect(requested).toEqual(
+      process.platform === "darwin"
+        ? ["sips", "magick", "convert", "gm", "ffmpeg"]
+        : process.platform === "win32"
+          ? ["powershell", "magick", "gm", "ffmpeg"]
+          : ["magick", "convert", "gm", "ffmpeg"],
+    );
   });
 
   it.runIf(process.platform === "darwin")(
-    "resolves sips through the injected resolver",
+    "tries sips first for external JPEG processing on macOS",
     async () => {
       const requested: string[] = [];
       const rastermill = createRastermill({
-        backend: "sips",
+        execution: "external",
         commandResolver: (command) => {
           requested.push(command);
           return null;
@@ -469,41 +644,9 @@ describe("Rastermill", () => {
       await expect(
         rastermill.encode(rgbaImage(4, 4), { format: "jpeg", resize: { maxSide: 4 } }),
       ).rejects.toBeInstanceOf(RastermillUnavailableError);
-      expect(requested).toEqual(["sips"]);
+      expect(requested[0]).toBe("sips");
     },
   );
-
-  it("reads the backend preference from the configured env var without app-specific fallbacks", async () => {
-    const previousRastermillBackend = process.env.RASTERMILL_IMAGE_BACKEND;
-    const previousOpenClawBackend = process.env.OPENCLAW_IMAGE_BACKEND;
-    try {
-      process.env.RASTERMILL_IMAGE_BACKEND = "imagemagick";
-      process.env.OPENCLAW_IMAGE_BACKEND = "ffmpeg";
-      const requested: string[] = [];
-      const rastermill = createRastermill({
-        commandResolver: (command) => {
-          requested.push(command);
-          return null;
-        },
-      });
-
-      await expect(
-        rastermill.encode(rgbaImage(4, 4), { format: "jpeg", resize: { maxSide: 4 } }),
-      ).rejects.toBeInstanceOf(RastermillUnavailableError);
-      expect(requested).toEqual(process.platform === "win32" ? ["magick"] : ["magick", "convert"]);
-    } finally {
-      if (previousRastermillBackend === undefined) {
-        delete process.env.RASTERMILL_IMAGE_BACKEND;
-      } else {
-        process.env.RASTERMILL_IMAGE_BACKEND = previousRastermillBackend;
-      }
-      if (previousOpenClawBackend === undefined) {
-        delete process.env.OPENCLAW_IMAGE_BACKEND;
-      } else {
-        process.env.OPENCLAW_IMAGE_BACKEND = previousOpenClawBackend;
-      }
-    }
-  });
 
   it("does not fall back to native tools after a real Photon processing error", async () => {
     vi.resetModules();

@@ -25,19 +25,20 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 
 | Page | What it covers |
 | --- | --- |
-| [Configuration](./configuration.md) | `createRastermill`, options, pixel budgets, env vars, custom command resolution |
+| [Configuration](./configuration.md) | `createRastermill`, options, pixel budgets, custom command resolution |
 | [Backends](./backends.md) | Execution modes, backend selection order, and automatic fallback |
 | [`probe`](./probe.md) | Read format, width/height, alpha, and orientation without decoding |
 | [`transparency`](./transparency.md) | Decode common raster formats and inspect alpha channels/pixels |
 | [`encode`](./encode.md) | Resize and re-encode to JPEG, PNG, or WebP, including HEIC/AVIF → JPEG |
 | [`encodeWithinBytes`](./encode-within-bytes.md) | Search size/quality/compression under a byte budget |
+| [`encodeBest`](./encode.md#encodebest) | Choose opaque vs transparency-preserving output, optionally under a byte budget |
 | [Error handling](./error-handling.md) | `RastermillUnavailableError`, `isRastermillUnavailableError` |
 
 ## Two ways to call
 
 Create a configured instance with `createRastermill(options)`, or use the
-default-configured module functions: `probe`, `transparency`, `encode`, and
-`encodeWithinBytes` are exported directly and lazily create a default
+default-configured module functions: `probe`, `transparency`, `encode`,
+`encodeWithinBytes`, and `encodeBest` are exported directly and lazily create a default
 `Rastermill` instance on first use.
 
 ## Safety model

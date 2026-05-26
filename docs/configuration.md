@@ -22,21 +22,19 @@ const rastermill = createRastermill({
 ```
 
 `createRastermill(options?)` returns a `Rastermill` with `probe`,
-`transparency`, `encode`, and `encodeWithinBytes`.
+`transparency`, `encode`, `encodeWithinBytes`, and `encodeBest`.
 
 ## Options
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `execution` | `"auto" \| "internal" \| "external"` | `"auto"` | Control whether Rastermill may use external processes. See [Backends](./backends.md). |
-| `backend` | `ImageBackendPreference` | `"auto"` (or env) | Advanced escape hatch to force one backend. See [Backends](./backends.md). |
 | `limits.inputPixels` | `number` | `25_000_000` | Reject decoding any image whose `width × height` exceeds this. |
 | `limits.outputPixels` | `number` | falls back to `limits.inputPixels`, else `25_000_000` | Reject resize targets larger than this. |
 | `temp.rootDir` | `string` | OS temp dir | Parent directory for external-backend workspaces. |
 | `temp.prefix` | `string \| () => string` | `"rastermill-"` | Filename prefix passed to `mkdtemp` for external-backend workspaces. |
 | `timeoutMs` | `number` | `20_000` | Per-invocation timeout for external tools. |
 | `maxProcessBufferBytes` | `number` | `1_048_576` (1 MiB) | Max stdout/stderr captured from an external tool. |
-| `env.backendVar` | `string` | `"RASTERMILL_IMAGE_BACKEND"` | Name of the env var read for the backend preference. |
 | `commandResolver` | `ImageCommandResolver` | PATH lookup | Resolve an external command name to an absolute path (or `null` if absent). |
 
 All numeric options must be positive safe integers; otherwise `createRastermill`
@@ -84,23 +82,6 @@ const rastermill = createRastermill({
 Use `"internal"` for strict sandboxes and serverless runtimes. Keep `"auto"` if
 you need HEIC/AVIF conversion today.
 
-## Backend preference from the environment
-
-When `backend` is not passed, Rastermill reads the preference from the environment
-variable named by `env.backendVar` (default `RASTERMILL_IMAGE_BACKEND`). Values
-are case-insensitive and a few aliases are accepted. App-specific environment
-names are intentionally not hard-coded; pass
-`env: { backendVar: "YOUR_APP_IMAGE_BACKEND" }` if you need one.
-
-- `windows`, `powershell`, `system.drawing`, `systemdrawing` → `windows-native`
-- `magick`, `convert` → `imagemagick`
-- `gm` → `graphicsmagick`
-- anything unrecognized → `auto`
-
-```sh
-RASTERMILL_IMAGE_BACKEND=imagemagick node app.js
-```
-
 ## Custom command resolution
 
 `commandResolver` lets you control how external tool names map to executables —
@@ -118,7 +99,7 @@ const rastermill = createRastermill({
 
 For one-off calls you can skip `createRastermill` and import the functions directly.
 They lazily create a default `Rastermill` instance on first use (`execution:
-"auto"`, `backend: "auto"`, 25 MP budgets):
+"auto"`, 25 MP budgets):
 
 ```ts
 import { probe, encode } from "rastermill";

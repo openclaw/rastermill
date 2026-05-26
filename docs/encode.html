@@ -146,15 +146,37 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <li>Omit <code>resize</code> entirely to re-encode at the original size — this is how you do a straight format conversion.</li>
 </ul>
 <p>By default the image is never enlarged; set <code>enlarge: true</code> to allow upscaling.</p>
+<h2 id="encodebest"><a class="anchor" href="#encodebest" aria-label="Anchor link">#</a><code>encodeBest</code></h2>
+<p>Use <code>encodeBest</code> when the caller wants Rastermill to choose the output path based on transparency:</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encodeBest(input, {
+  resize: { maxSide: <span class="hl-n">1600</span> },
+  opaque: { format: <span class="hl-s">&quot;jpeg&quot;</span>, quality: <span class="hl-n">85</span> },
+  transparent: { format: <span class="hl-s">&quot;png&quot;</span>, compressionLevel: <span class="hl-n">9</span> },
+  maxBytes: 500_000,
+  search: {
+    maxSide: [<span class="hl-n">1600</span>, <span class="hl-n">1280</span>, <span class="hl-n">1024</span>],
+    quality: [<span class="hl-n">85</span>, <span class="hl-n">75</span>, <span class="hl-n">65</span>],
+    compressionLevel: [<span class="hl-n">9</span>, <span class="hl-n">8</span>, <span class="hl-n">7</span>],
+  },
+  transparency: <span class="hl-s">&quot;prefer&quot;</span>,
+});
+<span class="hl-c">// =&gt; { data, format, width, height, bytes, withinBudget?, chosen }</span></code></pre>
+<p><code>transparency</code> controls alpha handling:</p>
+<ul>
+<li><strong><code>prefer</code></strong> (default) preserves alpha first, then flattens to the opaque output if a transparent result cannot fit <code>maxBytes</code>.</li>
+<li><strong><code>preserve</code></strong> never flattens alpha. If no transparent candidate fits, the result is the smallest transparent candidate with <code>withinBudget: false</code>.</li>
+<li><strong><code>flatten</code></strong> always uses the opaque output.</li>
+</ul>
+<p>If <code>maxBytes</code> is omitted, <code>encodeBest</code> does a single encode. If <code>maxBytes</code> is present, it uses the same search semantics as <a href="encode-within-bytes.html"><code>encodeWithinBytes</code></a>.</p>
 <h2 id="format-conversion-heic-avif-jpeg"><a class="anchor" href="#format-conversion-heic-avif-jpeg" aria-label="Anchor link">#</a>Format conversion (HEIC/AVIF → JPEG)</h2>
 <p>There is no separate convert method. Decode-and-encode is just <code>encode</code> with no resize:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> jpeg = <span class="hl-k">await</span> rastermill.encode(heicBuffer, { format: <span class="hl-s">&quot;jpeg&quot;</span> });</code></pre>
-<p>Photon can&#39;t decode HEIC/AVIF, so with <code>backend: &quot;auto&quot;</code> Rastermill falls through to a native tool (<code>sips</code>, ImageMagick, GraphicsMagick, or ffmpeg). If none is available you get a <a href="error-handling.html"><code>RastermillUnavailableError</code></a>.</p>
+<p>Photon can&#39;t decode HEIC/AVIF, so <code>execution: &quot;auto&quot;</code> falls through to a native tool (<code>sips</code>, ImageMagick, GraphicsMagick, or ffmpeg). If none is available you get a <a href="error-handling.html"><code>RastermillUnavailableError</code></a>.</p>
 <h2 id="orientation"><a class="anchor" href="#orientation" aria-label="Anchor link">#</a>Orientation</h2>
 <p>JPEG EXIF orientation is applied by default so the output pixels are upright. Pass <code>autoOrient: false</code> to keep the original pixel layout. HEIC/AVIF orientation is delegated to the native backend and may vary by tool.</p>
 <h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel budgets</h2>
 <p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="encode-within-bytes.html"><small>Next</small><span>encodeWithinBytes</span></a></nav></article>
-        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>
+        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#encodebest">encodeBest</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>
       </div>
     </main>
   </div>

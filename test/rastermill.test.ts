@@ -91,6 +91,10 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([length, typeBuffer, data, crc]);
 }
 
+function pngSignature(): Buffer {
+  return Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+}
+
 function pngWithTextChunk(source: Buffer): Buffer {
   return Buffer.concat([
     source.subarray(0, -12),
@@ -99,16 +103,32 @@ function pngWithTextChunk(source: Buffer): Buffer {
   ]);
 }
 
+function pngHeaderWithColorType(width: number, height: number, colorType: number): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = colorType;
+  return Buffer.concat([pngSignature(), pngChunk("IHDR", ihdr), pngChunk("IEND", Buffer.alloc(0))]);
+}
+
 function truecolorPngHeader(width: number, height: number): Buffer {
+  return pngHeaderWithColorType(width, height, 2);
+}
+
+function truncatedPngAncillaryChunk(width: number, height: number): Buffer {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
   ihdr[9] = 2;
+  const badTextLength = Buffer.alloc(4);
+  badTextLength.writeUInt32BE(10, 0);
   return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngSignature(),
     pngChunk("IHDR", ihdr),
-    pngChunk("IEND", Buffer.alloc(0)),
+    badTextLength,
+    Buffer.from("tEXt!"),
   ]);
 }
 
@@ -119,18 +139,14 @@ function indexedTransparentPngHeader(width: number, height: number): Buffer {
   ihdr[8] = 8;
   ihdr[9] = 3;
   return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngSignature(),
     pngChunk("IHDR", ihdr),
     pngChunk("tRNS", Buffer.from([0])),
     pngChunk("IEND", Buffer.alloc(0)),
   ]);
 }
 
-function jpegWithAppMetadata(width: number, height: number): Buffer {
-  const app1 = Buffer.concat([
-    Buffer.from([0xff, 0xe1, 0x00, 0x08]),
-    Buffer.from("Exif\0\0", "binary"),
-  ]);
+function jpegFrame(width: number, height: number): Buffer {
   const sof = Buffer.from([
     0xff,
     0xc0,
@@ -156,7 +172,33 @@ function jpegWithAppMetadata(width: number, height: number): Buffer {
     0xff, 0xda, 0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x00, 0x3f, 0x00, 0x00, 0xff,
     0xd9,
   ]);
-  return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, sof, sos]);
+  return Buffer.concat([sof, sos]);
+}
+
+function jpegWithAppMetadata(width: number, height: number): Buffer {
+  const app1 = Buffer.concat([
+    Buffer.from([0xff, 0xe1, 0x00, 0x08]),
+    Buffer.from("Exif\0\0", "binary"),
+  ]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, jpegFrame(width, height)]);
+}
+
+function jpegWithExifOrientation(width: number, height: number, orientation: number): Buffer {
+  const tiff = Buffer.alloc(26);
+  tiff.write("II", 0, "ascii");
+  tiff.writeUInt16LE(42, 2);
+  tiff.writeUInt32LE(8, 4);
+  tiff.writeUInt16LE(1, 8);
+  tiff.writeUInt16LE(0x0112, 10);
+  tiff.writeUInt16LE(3, 12);
+  tiff.writeUInt32LE(1, 14);
+  tiff.writeUInt16LE(orientation, 18);
+  const app1Payload = Buffer.concat([Buffer.from("Exif\0\0", "binary"), tiff]);
+  const app1 = Buffer.alloc(4);
+  app1[0] = 0xff;
+  app1[1] = 0xe1;
+  app1.writeUInt16BE(app1Payload.length + 2, 2);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, app1Payload, jpegFrame(width, height)]);
 }
 
 async function writeImageToolScript(
@@ -212,6 +254,13 @@ function bmpHeader(width: number, height: number): Buffer {
   buffer.writeUInt32LE(40, 14);
   buffer.writeInt32LE(width, 18);
   buffer.writeInt32LE(height, 22);
+  return buffer;
+}
+
+function bmpHeaderWithDibSize(size: number): Buffer {
+  const buffer = Buffer.alloc(26);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(size, 14);
   return buffer;
 }
 
@@ -345,6 +394,42 @@ describe("Rastermill", () => {
       format: "avif",
       width: 11,
       height: 7,
+    });
+  });
+
+  it("returns conservative probes for malformed but recognizable headers", () => {
+    const badLosslessWebp = Buffer.from(losslessWebpHeader(3, 2, false));
+    badLosslessWebp[20] = 0x00;
+    const nonImageFtyp = Buffer.from(isoBox("ftyp", Buffer.from("mp42\0\0\0\0", "binary")));
+    const truncatedExtendedFtyp = Buffer.alloc(12);
+    truncatedExtendedFtyp.writeUInt32BE(1, 0);
+    truncatedExtendedFtyp.write("ftyp", 4, "ascii");
+
+    expect(readImageProbeFromHeader(pngHeaderWithColorType(2, 2, 1))).toMatchObject({
+      format: "png",
+      hasAlpha: null,
+    });
+    expect(readImageProbeFromHeader(truncatedPngAncillaryChunk(2, 2))).toMatchObject({
+      format: "png",
+      hasAlpha: null,
+    });
+    expect(readImageProbeFromHeader(badLosslessWebp)).toBeNull();
+    expect(readImageProbeFromHeader(bmpHeaderWithDibSize(16))).toBeNull();
+    expect(readImageProbeFromHeader(Buffer.from("MM\0\0\0\0\0\0", "binary"))).toBeNull();
+    expect(readImageProbeFromHeader(nonImageFtyp)).toBeNull();
+    expect(readImageProbeFromHeader(truncatedExtendedFtyp)).toBeNull();
+  });
+
+  it("reads JPEG EXIF orientation hints without decoding", () => {
+    expect(readImageProbeFromHeader(jpegWithExifOrientation(6, 4, 6))).toMatchObject({
+      format: "jpeg",
+      width: 6,
+      height: 4,
+      orientation: 6,
+      hasAlpha: false,
+    });
+    expect(readImageProbeFromHeader(jpegWithExifOrientation(6, 4, 9))).toMatchObject({
+      orientation: null,
     });
   });
 
@@ -1033,6 +1118,59 @@ describe("Rastermill", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "falls back to legacy ImageMagick convert when magick is unavailable",
+    async () => {
+      const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-legacy-convert-"));
+      try {
+        const log = path.join(tmp, "args.jsonl");
+        const script = path.join(tmp, "convert.js");
+        await writeImageToolScript(script, log, {
+          jpeg: jpegWithAppMetadata(7, 5),
+        });
+        const rastermill = createRastermill({
+          execution: "external",
+          commandResolver: (command) => (command === "convert" ? script : null),
+        });
+
+        const result = await rastermill.encode(heifLikeImage({ width: 7, height: 5 }), {
+          format: "jpeg",
+          quality: 77,
+        });
+
+        expect(result).toMatchObject({ format: "jpeg", width: 7, height: 5 });
+        const args = JSON.parse((await readFile(log, "utf8")).trim()) as string[];
+        expect(args[0]).toContain("in.img[0]");
+        expect(args).toContain("-quality");
+        expect(args).toContain("77");
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("surfaces undecodable bytes emitted by external encoders", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-bad-output-"));
+    try {
+      const script = path.join(tmp, "magick.js");
+      await writeImageToolScript(script, path.join(tmp, "args.jsonl"), {
+        jpeg: Buffer.from("not-a-jpeg"),
+      });
+      const rastermill = createRastermill({
+        execution: "external",
+        commandResolver: (command) => (command === "magick" ? script : null),
+      });
+
+      await expect(
+        rastermill.encode(heifLikeImage({ width: 4, height: 4 }), { format: "jpeg" }),
+      ).rejects.toMatchObject({
+        code: "RASTERMILL_UNDECODABLE",
+      });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("passes PNG compression to ImageMagick external encoding", async () => {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-png-magick-"));
     try {
@@ -1086,6 +1224,38 @@ describe("Rastermill", () => {
         const args = JSON.parse((await readFile(log, "utf8")).trim()) as string[];
         expect(args).toContain("--cropToHeightWidth");
         expect(args).toContain("--out");
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "applies EXIF orientation before sips encoding",
+    async () => {
+      const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-sips-orient-"));
+      try {
+        const log = path.join(tmp, "args.jsonl");
+        const script = path.join(tmp, "sips.js");
+        await writeImageToolScript(script, log, {
+          jpeg: jpegWithAppMetadata(2, 4),
+        });
+        const rastermill = createRastermill({
+          execution: "external",
+          commandResolver: (command) => (command === "sips" ? script : null),
+        });
+
+        const result = await rastermill.encode(jpegWithExifOrientation(4, 2, 6), {
+          format: "jpeg",
+        });
+
+        expect(result).toMatchObject({ format: "jpeg", width: 2, height: 4 });
+        const invocations = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as string[]);
+        expect(invocations[0]).toEqual(expect.arrayContaining(["-r", "90", "--out"]));
+        expect(invocations[1]).toEqual(expect.arrayContaining(["-s", "format", "jpeg"]));
       } finally {
         await rm(tmp, { recursive: true, force: true });
       }
@@ -1153,6 +1323,21 @@ describe("Rastermill", () => {
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  it("rethrows the first byte-budget encode error when no candidate succeeds", async () => {
+    const rastermill = createRastermill({
+      execution: "external",
+      commandResolver: () => null,
+    });
+
+    await expect(
+      rastermill.encode(rgbaImage(4, 4), {
+        format: "png",
+        maxBytes: 100,
+        search: { maxSide: [4], compressionLevel: [9] },
+      }),
+    ).rejects.toBeInstanceOf(RastermillUnavailableError);
   });
 
   it("strips JPEG metadata emitted by native backends", async () => {

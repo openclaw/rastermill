@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Expand coverage for malformed image headers, EXIF orientation handling, native fallback selection, and external encoder error paths.
+
 ## 0.3.0 - 2026-05-26
 
 - Add `transparency(input)` for alpha-channel and transparent-pixel inspection across common raster formats.

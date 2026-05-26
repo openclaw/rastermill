@@ -17,7 +17,7 @@ const jpeg = await rastermill.encode(imageBuffer, {
   resize: { maxSide: 1600 },
   quality: 85,
 });
-// => { data, format: "jpeg", width, height, bytes, metadata: "stripped" }
+// => { data, format: "jpeg", mimeType: "image/jpeg", width, height, bytes, metadata: "stripped" }
 ```
 
 Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
@@ -30,17 +30,18 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 | [Backends](./backends.md) | Execution modes, backend selection order, and automatic fallback |
 | [`probe`](./probe.md) | Read format, width/height, alpha, and orientation without decoding |
 | [`transparency`](./transparency.md) | Decode common raster formats and inspect alpha channels/pixels |
-| [`encode`](./encode.md) | Resize and re-encode to JPEG, PNG, or WebP, metadata policy, including HEIC/AVIF → JPEG |
+| [`encode`](./encode.md) | Resize and re-encode to JPEG, PNG, or WebP, metadata policy, MIME result, including HEIC/AVIF → JPEG |
 | [`encodeWithinBytes`](./encode-within-bytes.md) | Search size/quality/compression under a byte budget |
 | [`encodeBest`](./encode.md#encodebest) | Choose opaque vs transparency-preserving output, optionally under a byte budget |
+| [`encodeToLimits`](./encode.md#encodetolimits) | Fit images inside max width/height/pixel limits |
 | [Error handling](./error-handling.md) | `RastermillUnavailableError`, `isRastermillUnavailableError` |
 
 ## Two ways to call
 
 Create a configured instance with `createRastermill(options)`, or use the
 default-configured module functions: `probe`, `transparency`, `encode`,
-`encodeWithinBytes`, and `encodeBest` are exported directly and lazily create a default
-`Rastermill` instance on first use.
+`encodeWithinBytes`, `encodeBest`, and `encodeToLimits` are exported directly
+and lazily create a default `Rastermill` instance on first use.
 
 ## Safety model
 

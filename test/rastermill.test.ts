@@ -408,6 +408,19 @@ describe("Rastermill", () => {
     expect(result.chosen.quality).toBeGreaterThan(0);
   });
 
+  it("labels explicit flattening of transparent input", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(16, 16, 120);
+
+    const result = await rastermill.encodeBest(source, {
+      transparency: "flatten",
+      opaque: { format: "jpeg", quality: 80 },
+    });
+
+    expect(result.format).toBe("jpeg");
+    expect(result.chosen.transparency).toBe("flattened");
+  });
+
   it("preserves transparent output when flattening is disabled", async () => {
     const rastermill = createRastermill();
     const source = rgbaImage(64, 64, 120);
@@ -496,6 +509,61 @@ describe("Rastermill", () => {
 
     expect(result.format).toBe("jpeg");
     expect(result.chosen.transparency).toBe("flattened");
+  });
+
+  it("auto transparency inspects known alpha-capable formats", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(16, 16, 120);
+
+    const result = await rastermill.encodeBest(source, {
+      transparency: "auto",
+      opaque: { format: "jpeg", quality: 80 },
+      transparent: { format: "png", compressionLevel: 9 },
+    });
+
+    expect(result).toMatchObject({
+      format: "png",
+      mimeType: "image/png",
+      chosen: { transparency: "preserved" },
+    });
+  });
+
+  it("encodes to dimension limits and reports MIME type", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encodeToLimits(rgbaImage(16, 8), {
+      limits: { maxWidth: 4, maxHeight: 4, maxPixels: 16 },
+      opaque: { format: "jpeg", quality: 80 },
+      transparency: "flatten",
+    });
+
+    expect(result).toMatchObject({
+      format: "jpeg",
+      mimeType: "image/jpeg",
+      width: 4,
+      height: 2,
+      resized: true,
+      chosen: { transparency: "flattened" },
+    });
+  });
+
+  it("preserves original bytes in encodeToLimits when no resize is needed", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(4, 4, 255);
+
+    const result = await rastermill.encodeToLimits(source, {
+      limits: { maxWidth: 8, maxHeight: 8 },
+    });
+
+    expect(result).toMatchObject({
+      format: "png",
+      mimeType: "image/png",
+      width: 4,
+      height: 4,
+      resized: false,
+      metadata: "preserved",
+    });
+    expect(result.data.equals(source)).toBe(true);
   });
 
   it("uses external quality-capable backends for WebP quality", async () => {

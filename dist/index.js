@@ -911,6 +911,50 @@ function finalDimensions(metadata, resize) {
         height: Math.max(1, Math.min(scaled.height, Math.round(scaled.width / boxAspect))),
     };
 }
+function normalizeDimensionLimits(limits) {
+    const normalized = {
+        ...(limits.maxWidth === undefined
+            ? {}
+            : { maxWidth: normalizePositiveInteger(limits.maxWidth, "limits.maxWidth") }),
+        ...(limits.maxHeight === undefined
+            ? {}
+            : { maxHeight: normalizePositiveInteger(limits.maxHeight, "limits.maxHeight") }),
+        ...(limits.maxPixels === undefined
+            ? {}
+            : { maxPixels: normalizePositiveInteger(limits.maxPixels, "limits.maxPixels") }),
+    };
+    if (normalized.maxWidth === undefined &&
+        normalized.maxHeight === undefined &&
+        normalized.maxPixels === undefined) {
+        throw rastermillError("RASTERMILL_BAD_OPTION", "encodeToLimits requires at least one dimension limit");
+    }
+    return normalized;
+}
+function resizeForDimensionLimits(metadata, limits) {
+    const scale = Math.min(1, limits.maxWidth === undefined ? 1 : limits.maxWidth / metadata.width, limits.maxHeight === undefined ? 1 : limits.maxHeight / metadata.height, limits.maxPixels === undefined
+        ? 1
+        : Math.sqrt(limits.maxPixels / (metadata.width * metadata.height)));
+    if (!Number.isFinite(scale) || scale >= 1) {
+        return null;
+    }
+    const maxWidth = limits.maxWidth ?? Number.POSITIVE_INFINITY;
+    const maxHeight = limits.maxHeight ?? Number.POSITIVE_INFINITY;
+    const maxPixels = limits.maxPixels ?? Number.POSITIVE_INFINITY;
+    let width = Math.max(1, Math.floor(metadata.width * scale));
+    let height = Math.max(1, Math.floor(metadata.height * scale));
+    while (width > maxWidth || height > maxHeight || width * height > maxPixels) {
+        if (width >= height && width > 1) {
+            width -= 1;
+        }
+        else if (height > 1) {
+            height -= 1;
+        }
+        else {
+            break;
+        }
+    }
+    return { width, height, fit: "inside", enlarge: false };
+}
 function autoOrientedMetadata(buffer, metadata, autoOrient) {
     if (!autoOrient) {
         return metadata;
@@ -1610,12 +1654,16 @@ function stripJpegMetadata(data) {
 function normalizeMetadataPolicy(policy) {
     return policy ?? "strip";
 }
+function mimeTypeForEncodedFormat(format) {
+    return format === "jpeg" ? "image/jpeg" : format === "png" ? "image/png" : "image/webp";
+}
 function encodedImage(data, format, metadataStatus) {
     const output = metadataStatus === "stripped" && format === "jpeg" ? stripJpegMetadata(data) : data;
     const metadata = readRequiredEncodedMetadata(output, format);
     return {
         data: output,
         format,
+        mimeType: mimeTypeForEncodedFormat(format),
         width: metadata.width,
         height: metadata.height,
         bytes: output.length,
@@ -1653,6 +1701,14 @@ function encodeBestOptions(options) {
         transparency: options?.transparency ?? "prefer",
     };
 }
+function encodeToLimitsOptions(options) {
+    return {
+        ...options,
+        opaque: options.opaque ?? { format: "jpeg" },
+        transparent: options.transparent ?? { format: "png" },
+        transparency: options.transparency ?? "auto",
+    };
+}
 function encodeBestFormatOptions(formatOptions, options) {
     return {
         ...formatOptions,
@@ -1682,6 +1738,27 @@ async function inspectImageTransparency(rastermill, buffer, header) {
         }
         throw error;
     }
+}
+function headerTransparencyHint(header) {
+    return {
+        hasAlphaChannel: header?.hasAlpha === true,
+        hasTransparentPixels: false,
+    };
+}
+function shouldAutoInspectTransparency(header) {
+    if (!header || header.hasAlpha === false) {
+        return false;
+    }
+    return header.format === "png" || header.format === "gif" || header.format === "webp";
+}
+async function resolveEncodeBestTransparency(rastermill, mode, buffer, header) {
+    if (mode === "flatten") {
+        return headerTransparencyHint(header);
+    }
+    if (mode === "auto" && !shouldAutoInspectTransparency(header)) {
+        return headerTransparencyHint(header);
+    }
+    return await inspectImageTransparency(rastermill, buffer, header);
 }
 function bestChosen(out, transparency) {
     const withinBudget = "withinBudget" in out ? { withinBudget: out.withinBudget } : {};
@@ -1914,9 +1991,7 @@ function createProcessor(options) {
             const buffer = toBuffer(input);
             const encodeOptions = encodeBestOptions(rawOptions);
             const header = readImageProbeFromHeader(buffer);
-            const alpha = encodeOptions.transparency === "flatten"
-                ? { hasAlphaChannel: false, hasTransparentPixels: false }
-                : await inspectImageTransparency(rastermill, buffer, header);
+            const alpha = await resolveEncodeBestTransparency(rastermill, encodeOptions.transparency, buffer, header);
             const useTransparent = alpha.hasTransparentPixels && encodeOptions.transparency !== "flatten";
             const firstFormat = useTransparent ? encodeOptions.transparent : encodeOptions.opaque;
             const firstTransparency = useTransparent
@@ -1941,6 +2016,42 @@ function createProcessor(options) {
                 maxBytes,
             }));
             return bestChosen(flattened, alpha.hasAlphaChannel ? "flattened" : "not-present");
+        },
+        async encodeToLimits(input, rawOptions) {
+            const buffer = toBuffer(input);
+            const encodeOptions = encodeToLimitsOptions(rawOptions);
+            const header = readImageProbeFromHeader(buffer);
+            const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
+            const orientedMetadata = autoOrientedMetadata(buffer, metadata, encodeOptions.autoOrient !== false);
+            const limits = normalizeDimensionLimits(encodeOptions.limits);
+            const resize = resizeForDimensionLimits(orientedMetadata, limits);
+            if (!resize && encodeOptions.maxBytes === undefined && header) {
+                if (header.format === "jpeg" ||
+                    header.format === "png" ||
+                    header.format === "webp") {
+                    const out = await rastermill.encode(buffer, {
+                        format: header.format,
+                        ...(encodeOptions.autoOrient === undefined
+                            ? {}
+                            : { autoOrient: encodeOptions.autoOrient }),
+                        metadata: encodeOptions.metadata ?? "preserve",
+                        ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+                    });
+                    return { ...bestChosen(out, header.hasAlpha === true ? "preserved" : "not-present"), resized: false };
+                }
+            }
+            const out = await rastermill.encodeBest(buffer, {
+                opaque: encodeOptions.opaque,
+                transparent: encodeOptions.transparent,
+                transparency: encodeOptions.transparency,
+                ...(resize === null ? {} : { resize }),
+                ...(encodeOptions.maxBytes === undefined ? {} : { maxBytes: encodeOptions.maxBytes }),
+                ...(encodeOptions.search === undefined ? {} : { search: encodeOptions.search }),
+                ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
+                ...(encodeOptions.metadata === undefined ? {} : { metadata: encodeOptions.metadata }),
+                ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+            });
+            return { ...out, resized: resize !== null };
         },
     };
     return rastermill;
@@ -1973,5 +2084,9 @@ export async function encodeWithinBytes(input, options) {
 /** Default-instance `encodeBest`. Uses transparent pixels, not merely alpha-channel presence, to choose flattening. */
 export async function encodeBest(input, options) {
     return await getDefaultRastermill().encodeBest(input, options);
+}
+/** Default-instance `encodeToLimits`. Returns original encoded bytes when dimensions already fit and preservation is allowed. */
+export async function encodeToLimits(input, options) {
+    return await getDefaultRastermill().encodeToLimits(input, options);
 }
 //# sourceMappingURL=index.js.map

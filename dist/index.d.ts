@@ -88,6 +88,7 @@ export type EncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOpt
 export type EncodedImage = ImageMetadata & {
     data: Buffer;
     format: EncodedImageFormat;
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
     bytes: number;
     metadata: EncodedImageMetadataStatus;
 };
@@ -122,8 +123,8 @@ export type EncodeBestFormatOptions = {
     format: "webp";
     quality?: number;
 };
-/** Transparency policy for `encodeBest`. `prefer` flattens fully opaque pixels and otherwise preserves alpha unless a byte budget cannot be met. */
-export type EncodeBestTransparencyMode = "prefer" | "preserve" | "flatten";
+/** Transparency policy for `encodeBest`. `auto` only decodes known alpha-capable internal formats before deciding. */
+export type EncodeBestTransparencyMode = "auto" | "prefer" | "preserve" | "flatten";
 /** Options for automatic opaque-vs-transparent output selection. */
 export type EncodeBestOptions = BaseEncodeOptions & {
     opaque?: EncodeBestFormatOptions;
@@ -142,6 +143,25 @@ export type EncodedImageBest = EncodedImage & {
         compressionLevel?: number;
     };
 };
+/** Dimension limits for `encodeToLimits`. At least one limit must be present. */
+export type ImageDimensionLimits = {
+    maxWidth?: number;
+    maxHeight?: number;
+    maxPixels?: number;
+};
+/** Resize only when dimensions exceed the supplied limits, then delegate to `encodeBest`. */
+export type EncodeToLimitsOptions = BaseEncodeOptions & {
+    limits: ImageDimensionLimits;
+    opaque?: EncodeBestFormatOptions;
+    transparent?: EncodeBestFormatOptions;
+    maxBytes?: number;
+    search?: EncodeSearchOptions;
+    transparency?: EncodeBestTransparencyMode;
+};
+/** `encodeToLimits` result. `resized` says whether dimension limits forced a resize. */
+export type EncodedImageToLimits = EncodedImageBest & {
+    resized: boolean;
+};
 /** Rastermill processor instance. Create one when you need custom limits, execution mode, temp roots, or command resolution. */
 export type Rastermill = {
     /** Read cheap header facts without full decode. Returns null for unknown, undecodable, or over-budget inputs. */
@@ -154,6 +174,8 @@ export type Rastermill = {
     encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
     /** Choose an opaque or transparency-preserving output format, optionally under a byte budget. */
     encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
+    /** Return an image inside max width/height/pixel limits, preserving original bytes when no work is needed and allowed. */
+    encodeToLimits(input: ImageInput, options: EncodeToLimitsOptions): Promise<EncodedImageToLimits>;
 };
 type ImageOperation = "encode" | "transparency";
 /** Structured Rastermill error codes. These are stable for external callers. */
@@ -191,5 +213,7 @@ export declare function encode(input: ImageInput, options: EncodeOptions): Promi
 export declare function encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
 /** Default-instance `encodeBest`. Uses transparent pixels, not merely alpha-channel presence, to choose flattening. */
 export declare function encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
+/** Default-instance `encodeToLimits`. Returns original encoded bytes when dimensions already fit and preservation is allowed. */
+export declare function encodeToLimits(input: ImageInput, options: EncodeToLimitsOptions): Promise<EncodedImageToLimits>;
 export {};
 //# sourceMappingURL=index.d.ts.map

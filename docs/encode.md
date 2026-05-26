@@ -8,12 +8,12 @@ const out = await rastermill.encode(input, {
   resize: { maxSide: 1600 },
   quality: 85,
 });
-// => { data: Buffer, format: "jpeg", width, height, bytes, metadata: "stripped" }
+// => { data: Buffer, format: "jpeg", mimeType: "image/jpeg", width, height, bytes, metadata: "stripped" }
 ```
 
 `encode` decodes the input, optionally resizes it, bakes in EXIF orientation,
 and encodes to `format`. The result carries the output bytes plus the final
-dimensions and metadata status, so callers never need to re-probe.
+dimensions, MIME type, and metadata status, so callers never need to re-probe.
 
 Metadata is stripped by default. `metadata: "preserve"` is deliberately narrow:
 it only preserves metadata when Rastermill can return the original bytes
@@ -94,13 +94,16 @@ const out = await rastermill.encodeBest(input, {
     quality: [85, 75, 65],
     compressionLevel: [9, 8, 7],
   },
-  transparency: "prefer",
+  transparency: "auto",
 });
 // => { data, format, width, height, bytes, withinBudget?, chosen }
 ```
 
 `transparency` controls alpha handling:
 
+- **`auto`** inspects transparent pixels only for known in-process
+  alpha-capable formats (`png`, `gif`, `webp`), otherwise uses the header hint
+  and chooses the opaque output.
 - **`prefer`** (default) preserves alpha first, then flattens to the opaque
   output if a transparent result cannot fit `maxBytes`.
 - **`preserve`** never flattens alpha. If no transparent candidate fits, the
@@ -114,6 +117,37 @@ present, it uses the same search semantics as
 `encodeBest` forwards `metadata`, `resize`, `autoOrient`, and `signal` to the
 chosen encode path. The same metadata limitation applies: preservation only
 happens when the final operation can return original bytes unchanged.
+
+`chosen.transparency` reports what happened to transparent pixels:
+
+- **`preserved`** means a transparent output format was selected.
+- **`flattened`** means the input had an alpha channel or transparent pixels and
+  Rastermill chose the opaque output.
+- **`not-present`** means no alpha was detected from the inspected/header facts.
+
+## `encodeToLimits`
+
+Use `encodeToLimits` when dimensions are the primary constraint:
+
+```ts
+const out = await rastermill.encodeToLimits(input, {
+  limits: { maxWidth: 4096, maxHeight: 4096, maxPixels: 20_000_000 },
+  opaque: { format: "jpeg", quality: 92 },
+  transparent: { format: "png", compressionLevel: 9 },
+  transparency: "auto",
+});
+// => EncodedImageBest & { resized: boolean }
+```
+
+If the image already fits and the input format is `jpeg`, `png`, or `webp`,
+Rastermill returns the original bytes by default with `metadata: "preserved"` and
+`resized: false`. Pass `metadata: "strip"` if even the no-resize path must
+re-encode. If dimensions exceed the limits, Rastermill computes a non-enlarging
+inside resize target and delegates to `encodeBest`.
+
+At least one of `limits.maxWidth`, `limits.maxHeight`, or `limits.maxPixels` is
+required. `maxBytes` and `search` can also be supplied; they use the same budget
+search semantics as `encodeBest`.
 
 ## Format conversion (HEIC/AVIF → JPEG)
 

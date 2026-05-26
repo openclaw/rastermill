@@ -106,8 +106,8 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   resize: { maxSide: <span class="hl-n">1600</span> },
   quality: <span class="hl-n">85</span>,
 });
-<span class="hl-c">// =&gt; { data: Buffer, format: &quot;jpeg&quot;, width, height, bytes, metadata: &quot;stripped&quot; }</span></code></pre>
-<p><code>encode</code> decodes the input, optionally resizes it, bakes in EXIF orientation, and encodes to <code>format</code>. The result carries the output bytes plus the final dimensions and metadata status, so callers never need to re-probe.</p>
+<span class="hl-c">// =&gt; { data: Buffer, format: &quot;jpeg&quot;, mimeType: &quot;image/jpeg&quot;, width, height, bytes, metadata: &quot;stripped&quot; }</span></code></pre>
+<p><code>encode</code> decodes the input, optionally resizes it, bakes in EXIF orientation, and encodes to <code>format</code>. The result carries the output bytes plus the final dimensions, MIME type, and metadata status, so callers never need to re-probe.</p>
 <p>Metadata is stripped by default. <code>metadata: &quot;preserve&quot;</code> is deliberately narrow: it only preserves metadata when Rastermill can return the original bytes unchanged. Photon does not expose EXIF/GPS/ICC/XMP read, write, or copy APIs, so any actual decode, resize, orientation, conversion, or quality/compression change returns fresh bytes with <code>metadata: &quot;stripped&quot;</code>.</p>
 <h2 id="options"><a class="anchor" href="#options" aria-label="Anchor link">#</a>Options</h2>
 <pre><code class="language-ts"><span class="hl-k">type</span> EncodeOptions =
@@ -163,17 +163,35 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
     quality: [<span class="hl-n">85</span>, <span class="hl-n">75</span>, <span class="hl-n">65</span>],
     compressionLevel: [<span class="hl-n">9</span>, <span class="hl-n">8</span>, <span class="hl-n">7</span>],
   },
-  transparency: <span class="hl-s">&quot;prefer&quot;</span>,
+  transparency: <span class="hl-s">&quot;auto&quot;</span>,
 });
 <span class="hl-c">// =&gt; { data, format, width, height, bytes, withinBudget?, chosen }</span></code></pre>
 <p><code>transparency</code> controls alpha handling:</p>
 <ul>
+<li><strong><code>auto</code></strong> inspects transparent pixels only for known in-process alpha-capable formats (<code>png</code>, <code>gif</code>, <code>webp</code>), otherwise uses the header hint and chooses the opaque output.</li>
 <li><strong><code>prefer</code></strong> (default) preserves alpha first, then flattens to the opaque output if a transparent result cannot fit <code>maxBytes</code>.</li>
 <li><strong><code>preserve</code></strong> never flattens alpha. If no transparent candidate fits, the result is the smallest transparent candidate with <code>withinBudget: false</code>.</li>
 <li><strong><code>flatten</code></strong> always uses the opaque output.</li>
 </ul>
 <p>If <code>maxBytes</code> is omitted, <code>encodeBest</code> does a single encode. If <code>maxBytes</code> is present, it uses the same search semantics as <a href="encode-within-bytes.html"><code>encodeWithinBytes</code></a>.</p>
 <p><code>encodeBest</code> forwards <code>metadata</code>, <code>resize</code>, <code>autoOrient</code>, and <code>signal</code> to the chosen encode path. The same metadata limitation applies: preservation only happens when the final operation can return original bytes unchanged.</p>
+<p><code>chosen.transparency</code> reports what happened to transparent pixels:</p>
+<ul>
+<li><strong><code>preserved</code></strong> means a transparent output format was selected.</li>
+<li><strong><code>flattened</code></strong> means the input had an alpha channel or transparent pixels and Rastermill chose the opaque output.</li>
+<li><strong><code>not-present</code></strong> means no alpha was detected from the inspected/header facts.</li>
+</ul>
+<h2 id="encodetolimits"><a class="anchor" href="#encodetolimits" aria-label="Anchor link">#</a><code>encodeToLimits</code></h2>
+<p>Use <code>encodeToLimits</code> when dimensions are the primary constraint:</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encodeToLimits(input, {
+  limits: { maxWidth: <span class="hl-n">4096</span>, maxHeight: <span class="hl-n">4096</span>, maxPixels: 20_000_000 },
+  opaque: { format: <span class="hl-s">&quot;jpeg&quot;</span>, quality: <span class="hl-n">92</span> },
+  transparent: { format: <span class="hl-s">&quot;png&quot;</span>, compressionLevel: <span class="hl-n">9</span> },
+  transparency: <span class="hl-s">&quot;auto&quot;</span>,
+});
+<span class="hl-c">// =&gt; EncodedImageBest &amp; { resized: boolean }</span></code></pre>
+<p>If the image already fits and the input format is <code>jpeg</code>, <code>png</code>, or <code>webp</code>, Rastermill returns the original bytes by default with <code>metadata: &quot;preserved&quot;</code> and <code>resized: false</code>. Pass <code>metadata: &quot;strip&quot;</code> if even the no-resize path must re-encode. If dimensions exceed the limits, Rastermill computes a non-enlarging inside resize target and delegates to <code>encodeBest</code>.</p>
+<p>At least one of <code>limits.maxWidth</code>, <code>limits.maxHeight</code>, or <code>limits.maxPixels</code> is required. <code>maxBytes</code> and <code>search</code> can also be supplied; they use the same budget search semantics as <code>encodeBest</code>.</p>
 <h2 id="format-conversion-heic-avif-jpeg"><a class="anchor" href="#format-conversion-heic-avif-jpeg" aria-label="Anchor link">#</a>Format conversion (HEIC/AVIF → JPEG)</h2>
 <p>There is no separate convert method. Decode-and-encode is just <code>encode</code> with no resize:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> jpeg = <span class="hl-k">await</span> rastermill.encode(heicBuffer, { format: <span class="hl-s">&quot;jpeg&quot;</span> });</code></pre>
@@ -183,7 +201,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <p>Orientation is pixel work, not metadata preservation. If Rastermill applies orientation, the output is re-encoded and reports <code>metadata: &quot;stripped&quot;</code>.</p>
 <h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel budgets</h2>
 <p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="encode-within-bytes.html"><small>Next</small><span>encodeWithinBytes</span></a></nav></article>
-        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#encodebest">encodeBest</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>
+        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#encodebest">encodeBest</a><a class="toc-l2" href="#encodetolimits">encodeToLimits</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>
       </div>
     </main>
   </div>

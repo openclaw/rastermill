@@ -1725,6 +1725,26 @@ function encodeBestWithinBytesOptions(formatOptions, options) {
         ...(options.search === undefined ? {} : { search: options.search }),
     };
 }
+function resizeForSearchMaxSide(resize, maxSide) {
+    const nextResize = { ...resize, maxSide };
+    if (resize?.width === undefined && resize?.height === undefined) {
+        return nextResize;
+    }
+    const boxMaxSide = Math.max(resize.width ?? 0, resize.height ?? 0);
+    if (boxMaxSide <= 0 || boxMaxSide <= maxSide) {
+        return nextResize;
+    }
+    const scale = maxSide / boxMaxSide;
+    return {
+        ...nextResize,
+        ...(resize.width === undefined
+            ? {}
+            : { width: Math.max(1, Math.floor(resize.width * scale)) }),
+        ...(resize.height === undefined
+            ? {}
+            : { height: Math.max(1, Math.floor(resize.height * scale)) }),
+    };
+}
 async function inspectImageTransparency(rastermill, buffer, header) {
     if (header?.hasAlpha === false) {
         return { hasAlphaChannel: false, hasTransparentPixels: false };
@@ -1938,7 +1958,7 @@ function createProcessor(options) {
                         ? compressionLevels
                         : [undefined]) {
                         try {
-                            const nextResize = { ...encodeOptions.resize, maxSide: side };
+                            const nextResize = resizeForSearchMaxSide(encodeOptions.resize, side);
                             const out = encodeOptions.format === "jpeg"
                                 ? await rastermill.encode(buffer, {
                                     ...encodeOptions,

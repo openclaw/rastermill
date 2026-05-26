@@ -2394,6 +2394,30 @@ function encodeBestWithinBytesOptions(
   };
 }
 
+function resizeForSearchMaxSide(
+  resize: ResizeOptions | undefined,
+  maxSide: number,
+): ResizeOptions {
+  const nextResize = { ...resize, maxSide };
+  if (resize?.width === undefined && resize?.height === undefined) {
+    return nextResize;
+  }
+  const boxMaxSide = Math.max(resize.width ?? 0, resize.height ?? 0);
+  if (boxMaxSide <= 0 || boxMaxSide <= maxSide) {
+    return nextResize;
+  }
+  const scale = maxSide / boxMaxSide;
+  return {
+    ...nextResize,
+    ...(resize.width === undefined
+      ? {}
+      : { width: Math.max(1, Math.floor(resize.width * scale)) }),
+    ...(resize.height === undefined
+      ? {}
+      : { height: Math.max(1, Math.floor(resize.height * scale)) }),
+  };
+}
+
 async function inspectImageTransparency(
   rastermill: Rastermill,
   buffer: Buffer,
@@ -2689,7 +2713,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
             ? compressionLevels
             : [undefined]) {
             try {
-              const nextResize = { ...encodeOptions.resize, maxSide: side };
+              const nextResize = resizeForSearchMaxSide(encodeOptions.resize, side);
               const out =
                 encodeOptions.format === "jpeg"
                   ? await rastermill.encode(buffer, {

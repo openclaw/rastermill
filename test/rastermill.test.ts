@@ -24,6 +24,20 @@ function rgbaImage(width: number, height: number, alpha = 255): Buffer {
   return encodePngRgba(pixels, width, height);
 }
 
+function gradientRgbaImage(width: number, height: number): Buffer {
+  const pixels = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      pixels[offset] = (x * 17 + y * 3) & 0xff;
+      pixels[offset + 1] = (x * 5 + y * 11) & 0xff;
+      pixels[offset + 2] = (x * 13 + y * 7) & 0xff;
+      pixels[offset + 3] = 255;
+    }
+  }
+  return encodePngRgba(pixels, width, height);
+}
+
 function losslessWebpHeader(width: number, height: number, hasAlpha: boolean): Buffer {
   const bits = (width - 1) | ((height - 1) << 14) | (hasAlpha ? 1 << 28 : 0);
   const payload = Buffer.alloc(5);
@@ -545,6 +559,37 @@ describe("Rastermill", () => {
       resized: true,
       chosen: { transparency: "flattened" },
     });
+  });
+
+  it("lets byte-budget search shrink below dimension limits", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encodeToLimits(gradientRgbaImage(128, 128), {
+      limits: { maxWidth: 64, maxHeight: 64 },
+      opaque: { format: "jpeg", quality: 90 },
+      transparency: "flatten",
+      maxBytes: 800,
+      search: { maxSide: [64, 32, 16], quality: [90, 60] },
+    });
+
+    expect(result.withinBudget).toBe(true);
+    expect(result.bytes).toBeLessThanOrEqual(800);
+    expect(result.chosen.maxSide).toBeLessThan(64);
+    expect(result.width).toBeLessThanOrEqual(32);
+    expect(result.resized).toBe(true);
+  });
+
+  it("keeps maxPixels limits after dimension-limited resizing", async () => {
+    const rastermill = createRastermill();
+
+    const result = await rastermill.encodeToLimits(rgbaImage(100, 99), {
+      limits: { maxPixels: 2475 },
+      opaque: { format: "jpeg", quality: 80 },
+      transparency: "flatten",
+    });
+
+    expect(result.width * result.height).toBeLessThanOrEqual(2475);
+    expect(result.resized).toBe(true);
   });
 
   it("preserves original bytes in encodeToLimits when no resize is needed", async () => {

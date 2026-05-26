@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -8,6 +9,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -28,7 +33,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - run: pnpm test
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test:coverage
       - run: pnpm build
       - run: pnpm docs:check
       - run: pnpm pack --pack-destination /tmp/rastermill-pack

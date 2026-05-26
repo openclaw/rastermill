@@ -39,6 +39,54 @@ function losslessWebpHeader(width: number, height: number, hasAlpha: boolean): B
   return buffer;
 }
 
+function jpegWithAppMetadata(width: number, height: number): Buffer {
+  const app1 = Buffer.concat([
+    Buffer.from([0xff, 0xe1, 0x00, 0x08]),
+    Buffer.from("Exif\0\0", "binary"),
+  ]);
+  const sof = Buffer.from([
+    0xff,
+    0xc0,
+    0x00,
+    0x11,
+    0x08,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff,
+    0x03,
+    0x01,
+    0x11,
+    0x00,
+    0x02,
+    0x11,
+    0x00,
+    0x03,
+    0x11,
+    0x00,
+  ]);
+  const sos = Buffer.from([
+    0xff,
+    0xda,
+    0x00,
+    0x0c,
+    0x03,
+    0x01,
+    0x00,
+    0x02,
+    0x00,
+    0x03,
+    0x00,
+    0x00,
+    0x3f,
+    0x00,
+    0x00,
+    0xff,
+    0xd9,
+  ]);
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), app1, sof, sos]);
+}
+
 function isoBox(type: string, payload: Buffer): Buffer {
   const box = Buffer.alloc(8 + payload.length);
   box.writeUInt32BE(box.length, 0);
@@ -375,7 +423,45 @@ describe("Rastermill", () => {
     expect(result.chosen.transparency).toBe("preserved");
   });
 
-  it("reuses matching input bytes without loading Photon when no encode work is needed", async () => {
+  it("strips metadata by default by re-encoding matching input bytes", async () => {
+    vi.resetModules();
+    let photonImported = false;
+    vi.doMock("@silvia-odwyer/photon-node", () => {
+      photonImported = true;
+      class MockPhotonImage {
+        static new_from_byteslice = vi.fn(() => new MockPhotonImage());
+        free(): void {}
+        get_height(): number {
+          return 4;
+        }
+        get_raw_pixels(): Uint8Array {
+          return new Uint8Array(4 * 4 * 4);
+        }
+        get_width(): number {
+          return 4;
+        }
+      }
+      return {
+        PhotonImage: MockPhotonImage,
+        SamplingFilter: {
+          Lanczos3: 1,
+        },
+        crop: vi.fn((image) => image),
+        resize: vi.fn((image) => image),
+      };
+    });
+    const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+      await import("../src/index.js");
+    const source = encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4);
+
+    const result = await createFreshRastermill().encode(source, { format: "png" });
+
+    expect(result).toMatchObject({ format: "png", width: 4, height: 4, metadata: "stripped" });
+    expect(result.data.equals(source)).toBe(false);
+    expect(photonImported).toBe(true);
+  });
+
+  it("reuses matching input bytes only when metadata preservation is requested", async () => {
     vi.resetModules();
     vi.doMock("@silvia-odwyer/photon-node", () => {
       throw new Error("Photon should not be imported for no-op encodes");
@@ -384,10 +470,139 @@ describe("Rastermill", () => {
       await import("../src/index.js");
     const source = encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4);
 
-    const result = await createFreshRastermill().encode(source, { format: "png" });
+    const result = await createFreshRastermill().encode(source, {
+      format: "png",
+      metadata: "preserve",
+    });
 
-    expect(result).toMatchObject({ format: "png", width: 4, height: 4, bytes: source.length });
+    expect(result).toMatchObject({
+      format: "png",
+      width: 4,
+      height: 4,
+      bytes: source.length,
+      metadata: "preserved",
+    });
     expect(result.data.equals(source)).toBe(true);
+  });
+
+  it("flattens opaque RGBA images in encodeBest prefer mode", async () => {
+    const rastermill = createRastermill();
+    const source = rgbaImage(32, 32, 255);
+
+    const result = await rastermill.encodeBest(source, {
+      opaque: { format: "jpeg", quality: 80 },
+      transparent: { format: "png", compressionLevel: 9 },
+    });
+
+    expect(result.format).toBe("jpeg");
+    expect(result.chosen.transparency).toBe("flattened");
+  });
+
+  it("uses external quality-capable backends for WebP quality", async () => {
+    vi.resetModules();
+    let photonImported = false;
+    vi.doMock("@silvia-odwyer/photon-node", () => {
+      photonImported = true;
+      throw new Error("Photon should not be imported for quality-controlled WebP");
+    });
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-webp-quality-"));
+    try {
+      const log = path.join(tmp, "args.json");
+      const script = path.join(tmp, "magick.js");
+      await writeFile(
+        script,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)));`,
+          `fs.writeFileSync(process.argv.at(-1), Buffer.from(${JSON.stringify(losslessWebpHeader(4, 4, false).toString("base64"))}, 'base64'));`,
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(script, 0o755);
+      const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+        await import("../src/index.js");
+      const rastermill = createFreshRastermill({
+        commandResolver: (command) => (command === "magick" ? script : null),
+      });
+
+      const result = await rastermill.encode(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
+        format: "webp",
+        quality: 72,
+      });
+
+      expect(result).toMatchObject({ format: "webp", width: 4, height: 4 });
+      expect(photonImported).toBe(false);
+      const args = JSON.parse(await readFile(log, "utf8")) as string[];
+      expect(args).toContain("-quality");
+      expect(args).toContain("72");
+      expect(args).toContain("-strip");
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("searches quality when encoding WebP within a byte budget", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-webp-budget-"));
+    try {
+      const script = path.join(tmp, "magick.js");
+      await writeFile(
+        script,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          "const args = process.argv.slice(2);",
+          "const quality = Number(args[args.indexOf('-quality') + 1]);",
+          `const header = Buffer.from(${JSON.stringify(losslessWebpHeader(4, 4, false).toString("base64"))}, 'base64');`,
+          "const padding = Buffer.alloc(quality > 60 ? 500 : 20);",
+          "fs.writeFileSync(process.argv.at(-1), Buffer.concat([header, padding]));",
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(script, 0o755);
+      const rastermill = createRastermill({
+        commandResolver: (command) => (command === "magick" ? script : null),
+      });
+
+      const result = await rastermill.encodeWithinBytes(rgbaImage(4, 4), {
+        format: "webp",
+        maxBytes: 200,
+        search: { maxSide: [4], quality: [85, 50] },
+      });
+
+      expect(result.withinBudget).toBe(true);
+      expect(result.chosen.quality).toBe(50);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("strips JPEG metadata emitted by native backends", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-jpeg-strip-"));
+    try {
+      const script = path.join(tmp, "magick.js");
+      await writeFile(
+        script,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(process.argv.at(-1), Buffer.from(${JSON.stringify(jpegWithAppMetadata(4, 4).toString("base64"))}, 'base64'));`,
+        ].join("\n"),
+        "utf8",
+      );
+      await chmod(script, 0o755);
+      const rastermill = createRastermill({
+        execution: "external",
+        commandResolver: (command) => (command === "magick" ? script : null),
+      });
+
+      const result = await rastermill.encode(rgbaImage(4, 4), { format: "jpeg" });
+
+      expect(result).toMatchObject({ format: "jpeg", width: 4, height: 4, metadata: "stripped" });
+      expect(result.data.includes(Buffer.from("Exif\0\0", "binary"))).toBe(false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("rejects images over the configured pixel budget before decoding", async () => {

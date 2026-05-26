@@ -11,7 +11,7 @@ Use `execution: "internal"` to forbid child processes. Use
 
 | Backend | Engine | Notes |
 | --- | --- | --- |
-| `photon` | In-process WASM ([Photon](https://github.com/silvia-odwyer/photon)) | Fast, no external process. Decodes PNG, JPEG, GIF, WebP. Encodes JPEG, PNG, WebP. Cannot decode HEIC/AVIF. |
+| `photon` | In-process WASM ([Photon](https://github.com/silvia-odwyer/photon)) | Fast, no external process. Decodes PNG, JPEG, GIF, WebP. Encodes JPEG, PNG, WebP. Cannot decode HEIC/AVIF, cannot set WebP quality, and exposes no EXIF/GPS/ICC/XMP metadata API. |
 | `sips` | macOS `/usr/bin/sips` | macOS only. JPEG output (incl. HEIC/AVIF → JPEG); not used for PNG. |
 | `windows-native` | Windows PowerShell + `System.Drawing` | Windows only. JPEG and PNG; does not convert HEIC. |
 | `imagemagick` | `magick` (or `convert`) | Broad format support, including HEIC/AVIF where codecs are installed. |
@@ -39,6 +39,23 @@ and falls through to native):
 `encode` to WebP:
 
 - all platforms: `photon → imagemagick → graphicsmagick → ffmpeg`
+
+If WebP `quality` is set, Photon is skipped because its WebP encoder is
+fixed-quality. In `execution: "internal"`, quality-controlled WebP therefore
+fails with `RastermillUnavailableError`.
+
+## Metadata
+
+Rastermill strips metadata by default. Photon outputs fresh pixel-derived bytes,
+and native ImageMagick/GraphicsMagick/ffmpeg paths pass explicit strip flags
+where those tools support them. JPEG outputs also pass through Rastermill's own
+APP/COM segment stripper so macOS `sips` output follows the same privacy
+contract.
+
+`metadata: "preserve"` is only a passthrough optimization: Rastermill may return
+the original bytes unchanged when format, dimensions, orientation, and explicit
+quality/compression work already match. Photon cannot copy metadata across a
+real transform, so transformed outputs report `metadata: "stripped"`.
 
 ## How fallback works
 

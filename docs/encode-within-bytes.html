@@ -117,12 +117,12 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
     compressionLevel?: readonly number[]; <span class="hl-c">// PNG compression steps</span>
   };
 };</code></pre>
-<p>The search iterates <code>maxSide</code> outermost, then the format-relevant axis: <code>quality</code> for JPEG, <code>compressionLevel</code> for PNG, and dimensions only for WebP. Sensible defaults are used for any axis you omit. All other <code>EncodeOptions</code> (e.g. <code>resize.fit</code>, <code>autoOrient</code>, <code>signal</code>) are forwarded to each attempt.</p>
+<p>The search iterates <code>maxSide</code> outermost, then the format-relevant axis: <code>quality</code> for JPEG/WebP, and <code>compressionLevel</code> for PNG. Sensible defaults are used for any axis you omit. All other <code>EncodeOptions</code> (e.g. <code>resize.fit</code>, <code>autoOrient</code>, <code>metadata</code>, <code>signal</code>) are forwarded to each attempt.</p>
 <h2 id="jpeg-vs-png-vs-webp"><a class="anchor" href="#jpeg-vs-png-vs-webp" aria-label="Anchor link">#</a>JPEG vs PNG vs WebP</h2>
 <ul>
 <li><strong>JPEG</strong>: searches <code>maxSide × quality</code>. Best for photos under a hard cap.</li>
 <li><strong>PNG</strong>: searches <code>maxSide × compressionLevel</code>. Lossless, so shrinking dimensions does most of the work.</li>
-<li><strong>WebP</strong>: searches <code>maxSide</code>. Photon&#39;s WebP encoder does not expose quality, so Rastermill does not expose a WebP quality option yet.</li>
+<li><strong>WebP</strong>: searches <code>maxSide × quality</code>, but quality-controlled WebP requires an external backend. Photon&#39;s WebP encoder is fixed-quality.</li>
 </ul>
 <pre><code class="language-ts"><span class="hl-c">// Shrink a PNG under 256 KB, lossless.</span>
 <span class="hl-k">const</span> png = <span class="hl-k">await</span> rastermill.encodeWithinBytes(input, {
@@ -134,7 +134,8 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <pre><code class="language-ts"><span class="hl-k">type</span> EncodedImageWithinBytes = EncodedImage &amp; {
   withinBudget: boolean;
   chosen: { maxSide?: number; quality?: number; compressionLevel?: number };
-};</code></pre><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="encode.html"><small>Previous</small><span>encode</span></a><a class="page-nav-next" href="backends.html"><small>Next</small><span>Backends</span></a></nav></article>
+};</code></pre>
+<p>The embedded <code>EncodedImage</code> includes <code>metadata: &quot;stripped&quot; | &quot;preserved&quot;</code>. Because byte-budget encoding always performs encode attempts, metadata is normally <code>&quot;stripped&quot;</code> unless a caller explicitly requested <code>metadata: &quot;preserve&quot;</code> and the selected candidate could reuse the original bytes unchanged.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="encode.html"><small>Previous</small><span>encode</span></a><a class="page-nav-next" href="backends.html"><small>Next</small><span>Backends</span></a></nav></article>
         <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l2" href="#jpeg-vs-png-vs-webp">JPEG vs PNG vs WebP</a><a class="toc-l2" href="#result">Result</a></nav>
       </div>
     </main>

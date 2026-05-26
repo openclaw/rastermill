@@ -30,17 +30,17 @@ type EncodeWithinBytesOptions = EncodeOptions & {
 ```
 
 The search iterates `maxSide` outermost, then the format-relevant axis: `quality`
-for JPEG, `compressionLevel` for PNG, and dimensions only for WebP. Sensible
-defaults are used for any axis you omit. All other `EncodeOptions` (e.g.
-`resize.fit`, `autoOrient`, `signal`) are forwarded to each attempt.
+for JPEG/WebP, and `compressionLevel` for PNG. Sensible defaults are used for
+any axis you omit. All other `EncodeOptions` (e.g. `resize.fit`, `autoOrient`,
+`metadata`, `signal`) are forwarded to each attempt.
 
 ## JPEG vs PNG vs WebP
 
 - **JPEG**: searches `maxSide × quality`. Best for photos under a hard cap.
 - **PNG**: searches `maxSide × compressionLevel`. Lossless, so shrinking
   dimensions does most of the work.
-- **WebP**: searches `maxSide`. Photon's WebP encoder does not expose quality,
-  so Rastermill does not expose a WebP quality option yet.
+- **WebP**: searches `maxSide × quality`, but quality-controlled WebP requires
+  an external backend. Photon's WebP encoder is fixed-quality.
 
 ```ts
 // Shrink a PNG under 256 KB, lossless.
@@ -60,3 +60,8 @@ type EncodedImageWithinBytes = EncodedImage & {
   chosen: { maxSide?: number; quality?: number; compressionLevel?: number };
 };
 ```
+
+The embedded `EncodedImage` includes `metadata: "stripped" | "preserved"`.
+Because byte-budget encoding always performs encode attempts, metadata is
+normally `"stripped"` unless a caller explicitly requested `metadata:
+"preserve"` and the selected candidate could reuse the original bytes unchanged.

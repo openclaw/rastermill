@@ -106,8 +106,9 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   resize: { maxSide: <span class="hl-n">1600</span> },
   quality: <span class="hl-n">85</span>,
 });
-<span class="hl-c">// =&gt; { data: Buffer, format: &quot;jpeg&quot;, width: number, height: number, bytes: number }</span></code></pre>
-<p><code>encode</code> decodes the input, optionally resizes it, bakes in EXIF orientation, and encodes to <code>format</code>. The result carries the output bytes plus the final dimensions, so callers never need to re-probe.</p>
+<span class="hl-c">// =&gt; { data: Buffer, format: &quot;jpeg&quot;, width, height, bytes, metadata: &quot;stripped&quot; }</span></code></pre>
+<p><code>encode</code> decodes the input, optionally resizes it, bakes in EXIF orientation, and encodes to <code>format</code>. The result carries the output bytes plus the final dimensions and metadata status, so callers never need to re-probe.</p>
+<p>Metadata is stripped by default. <code>metadata: &quot;preserve&quot;</code> is deliberately narrow: it only preserves metadata when Rastermill can return the original bytes unchanged. Photon does not expose EXIF/GPS/ICC/XMP read, write, or copy APIs, so any actual decode, resize, orientation, conversion, or quality/compression change returns fresh bytes with <code>metadata: &quot;stripped&quot;</code>.</p>
 <h2 id="options"><a class="anchor" href="#options" aria-label="Anchor link">#</a>Options</h2>
 <pre><code class="language-ts"><span class="hl-k">type</span> EncodeOptions =
   | {
@@ -115,6 +116,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       resize?: ResizeOptions;
       quality?: number;      <span class="hl-c">// 1–100 (default 85)</span>
       autoOrient?: boolean;  <span class="hl-c">// default true</span>
+      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
       signal?: AbortSignal;
     }
   | {
@@ -122,15 +124,18 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       resize?: ResizeOptions;
       compressionLevel?: number; <span class="hl-c">// 0–9 (default 6)</span>
       autoOrient?: boolean;      <span class="hl-c">// default true</span>
+      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
       signal?: AbortSignal;
     }
   | {
       format: <span class="hl-s">&quot;webp&quot;</span>;
       resize?: ResizeOptions;
+      quality?: number;          <span class="hl-c">// 1–100; requires an external backend</span>
       autoOrient?: boolean;      <span class="hl-c">// default true</span>
+      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
       signal?: AbortSignal;
     };</code></pre>
-<p>Format-specific options are part of the discriminated union: <code>quality</code> is only valid for JPEG, and <code>compressionLevel</code> is only valid for PNG.</p>
+<p>Format-specific options are part of the discriminated union: <code>quality</code> is only valid for JPEG/WebP, and <code>compressionLevel</code> is only valid for PNG. WebP quality requires <code>execution: &quot;auto&quot;</code> with a native backend available, or <code>execution: &quot;external&quot;</code>; Photon&#39;s <code>get_bytes_webp()</code> has no quality parameter.</p>
 <h3 id="resize"><a class="anchor" href="#resize" aria-label="Anchor link">#</a>Resize</h3>
 <pre><code class="language-ts"><span class="hl-k">type</span> ResizeOptions = {
   fit?: <span class="hl-s">&quot;inside&quot;</span> | <span class="hl-s">&quot;cover&quot;</span> | <span class="hl-s">&quot;fill&quot;</span>;
@@ -168,12 +173,14 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <li><strong><code>flatten</code></strong> always uses the opaque output.</li>
 </ul>
 <p>If <code>maxBytes</code> is omitted, <code>encodeBest</code> does a single encode. If <code>maxBytes</code> is present, it uses the same search semantics as <a href="encode-within-bytes.html"><code>encodeWithinBytes</code></a>.</p>
+<p><code>encodeBest</code> forwards <code>metadata</code>, <code>resize</code>, <code>autoOrient</code>, and <code>signal</code> to the chosen encode path. The same metadata limitation applies: preservation only happens when the final operation can return original bytes unchanged.</p>
 <h2 id="format-conversion-heic-avif-jpeg"><a class="anchor" href="#format-conversion-heic-avif-jpeg" aria-label="Anchor link">#</a>Format conversion (HEIC/AVIF → JPEG)</h2>
 <p>There is no separate convert method. Decode-and-encode is just <code>encode</code> with no resize:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> jpeg = <span class="hl-k">await</span> rastermill.encode(heicBuffer, { format: <span class="hl-s">&quot;jpeg&quot;</span> });</code></pre>
 <p>Photon can&#39;t decode HEIC/AVIF, so <code>execution: &quot;auto&quot;</code> falls through to a native tool (<code>sips</code>, ImageMagick, GraphicsMagick, or ffmpeg). If none is available you get a <a href="error-handling.html"><code>RastermillUnavailableError</code></a>.</p>
 <h2 id="orientation"><a class="anchor" href="#orientation" aria-label="Anchor link">#</a>Orientation</h2>
 <p>JPEG EXIF orientation is applied by default so the output pixels are upright. Pass <code>autoOrient: false</code> to keep the original pixel layout. HEIC/AVIF orientation is delegated to the native backend and may vary by tool.</p>
+<p>Orientation is pixel work, not metadata preservation. If Rastermill applies orientation, the output is re-encoded and reports <code>metadata: &quot;stripped&quot;</code>.</p>
 <h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel budgets</h2>
 <p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="encode-within-bytes.html"><small>Next</small><span>encodeWithinBytes</span></a></nav></article>
         <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#encodebest">encodeBest</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>

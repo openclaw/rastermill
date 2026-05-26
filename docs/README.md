@@ -17,6 +17,7 @@ const jpeg = await rastermill.encode(imageBuffer, {
   resize: { maxSide: 1600 },
   quality: 85,
 });
+// => { data, format: "jpeg", width, height, bytes, metadata: "stripped" }
 ```
 
 Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
@@ -29,7 +30,7 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 | [Backends](./backends.md) | Execution modes, backend selection order, and automatic fallback |
 | [`probe`](./probe.md) | Read format, width/height, alpha, and orientation without decoding |
 | [`transparency`](./transparency.md) | Decode common raster formats and inspect alpha channels/pixels |
-| [`encode`](./encode.md) | Resize and re-encode to JPEG, PNG, or WebP, including HEIC/AVIF → JPEG |
+| [`encode`](./encode.md) | Resize and re-encode to JPEG, PNG, or WebP, metadata policy, including HEIC/AVIF → JPEG |
 | [`encodeWithinBytes`](./encode-within-bytes.md) | Search size/quality/compression under a byte budget |
 | [`encodeBest`](./encode.md#encodebest) | Choose opaque vs transparency-preserving output, optionally under a byte budget |
 | [Error handling](./error-handling.md) | `RastermillUnavailableError`, `isRastermillUnavailableError` |
@@ -47,3 +48,8 @@ Rastermill refuses to process images it can't size up. It rejects images with
 unknown dimensions, inputs larger than `limits.inputPixels`, and resize targets
 larger than `limits.outputPixels`. External tools run with a timeout and a
 bounded output buffer. See [Configuration](./configuration.md) for the knobs.
+
+Encoded outputs strip metadata by default. `metadata: "preserve"` is a
+passthrough-only fast path: it preserves metadata only when the original bytes
+can be returned unchanged. Photon does not expose EXIF/GPS/ICC/XMP metadata
+APIs, so any real transform reports `metadata: "stripped"`.

@@ -8,12 +8,18 @@ const out = await rastermill.encode(input, {
   resize: { maxSide: 1600 },
   quality: 85,
 });
-// => { data: Buffer, format: "jpeg", width: number, height: number, bytes: number }
+// => { data: Buffer, format: "jpeg", width, height, bytes, metadata: "stripped" }
 ```
 
 `encode` decodes the input, optionally resizes it, bakes in EXIF orientation,
 and encodes to `format`. The result carries the output bytes plus the final
-dimensions, so callers never need to re-probe.
+dimensions and metadata status, so callers never need to re-probe.
+
+Metadata is stripped by default. `metadata: "preserve"` is deliberately narrow:
+it only preserves metadata when Rastermill can return the original bytes
+unchanged. Photon does not expose EXIF/GPS/ICC/XMP read, write, or copy APIs, so
+any actual decode, resize, orientation, conversion, or quality/compression
+change returns fresh bytes with `metadata: "stripped"`.
 
 ## Options
 
@@ -24,6 +30,7 @@ type EncodeOptions =
       resize?: ResizeOptions;
       quality?: number;      // 1–100 (default 85)
       autoOrient?: boolean;  // default true
+      metadata?: "strip" | "preserve"; // default "strip"
       signal?: AbortSignal;
     }
   | {
@@ -31,18 +38,23 @@ type EncodeOptions =
       resize?: ResizeOptions;
       compressionLevel?: number; // 0–9 (default 6)
       autoOrient?: boolean;      // default true
+      metadata?: "strip" | "preserve"; // default "strip"
       signal?: AbortSignal;
     }
   | {
       format: "webp";
       resize?: ResizeOptions;
+      quality?: number;          // 1–100; requires an external backend
       autoOrient?: boolean;      // default true
+      metadata?: "strip" | "preserve"; // default "strip"
       signal?: AbortSignal;
     };
 ```
 
 Format-specific options are part of the discriminated union: `quality` is only
-valid for JPEG, and `compressionLevel` is only valid for PNG.
+valid for JPEG/WebP, and `compressionLevel` is only valid for PNG. WebP quality
+requires `execution: "auto"` with a native backend available, or
+`execution: "external"`; Photon's `get_bytes_webp()` has no quality parameter.
 
 ### Resize
 
@@ -99,6 +111,10 @@ If `maxBytes` is omitted, `encodeBest` does a single encode. If `maxBytes` is
 present, it uses the same search semantics as
 [`encodeWithinBytes`](./encode-within-bytes.md).
 
+`encodeBest` forwards `metadata`, `resize`, `autoOrient`, and `signal` to the
+chosen encode path. The same metadata limitation applies: preservation only
+happens when the final operation can return original bytes unchanged.
+
 ## Format conversion (HEIC/AVIF → JPEG)
 
 There is no separate convert method. Decode-and-encode is just `encode` with no
@@ -117,6 +133,9 @@ get a [`RastermillUnavailableError`](./error-handling.md).
 JPEG EXIF orientation is applied by default so the output pixels are upright.
 Pass `autoOrient: false` to keep the original pixel layout. HEIC/AVIF orientation
 is delegated to the native backend and may vary by tool.
+
+Orientation is pixel work, not metadata preservation. If Rastermill applies
+orientation, the output is re-encoded and reports `metadata: "stripped"`.
 
 ## Pixel budgets
 

@@ -48,6 +48,7 @@ const CRC_TABLE = (() => {
     return table;
 })();
 let photonPromise = null;
+/** Base error for validation, size-limit, undecodable-input, and backend-unavailable failures. */
 export class RastermillError extends Error {
     code;
     constructor(code, message, options) {
@@ -56,6 +57,7 @@ export class RastermillError extends Error {
         this.code = code;
     }
 }
+/** Error thrown when the configured execution boundary cannot perform the requested image operation. */
 export class RastermillUnavailableError extends RastermillError {
     operation;
     causes;
@@ -68,9 +70,11 @@ export class RastermillUnavailableError extends RastermillError {
         this.causes = causes;
     }
 }
+/** Type guard for all structured Rastermill errors. */
 export function isRastermillError(error) {
     return error instanceof RastermillError;
 }
+/** Type guard for backend/codecs-unavailable errors. Malformed images and bad options are not "unavailable". */
 export function isRastermillUnavailableError(error) {
     return error instanceof RastermillUnavailableError;
 }
@@ -455,11 +459,13 @@ function readJpegMetadata(buffer) {
     }
     return null;
 }
+/** Read dimensions from a recognized image header without decoding pixels. Returns null when dimensions are unknown. */
 export function readImageMetadataFromHeader(input) {
     const buffer = toBuffer(input);
     const probe = readImageProbeFromHeader(buffer);
     return probe ? { width: probe.width, height: probe.height } : null;
 }
+/** Read format, dimensions, alpha hints, orientation, and byte size from a recognized image header. */
 export function readImageProbeFromHeader(input) {
     const buffer = toBuffer(input);
     const png = readPngMetadata(buffer);
@@ -984,6 +990,7 @@ function pngChunk(type, data) {
     crc.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
     return Buffer.concat([length, typeBuffer, data, crc]);
 }
+/** Encode raw RGBA pixels as PNG. This low-level helper writes no metadata chunks. */
 export function encodePngRgba(pixels, width, height, compressionLevel = 6) {
     normalizePositiveInteger(width, "width");
     normalizePositiveInteger(height, "height");
@@ -1013,7 +1020,7 @@ export function encodePngRgba(pixels, width, height, compressionLevel = 6) {
         pngChunk("IEND", Buffer.alloc(0)),
     ]);
 }
-function backendsForFormat(format, execution) {
+function backendsForFormat(format, execution, options = {}) {
     const candidates = format === "webp"
         ? ["photon", "imagemagick", "graphicsmagick", "ffmpeg"]
         : format === "png"
@@ -1025,13 +1032,16 @@ function backendsForFormat(format, execution) {
                 : process.platform === "win32"
                     ? ["photon", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"]
                     : ["photon", "imagemagick", "graphicsmagick", "ffmpeg"];
+    const usableCandidates = format === "webp" && options.webpQuality
+        ? candidates.filter((backend) => backend !== "photon")
+        : candidates;
     if (execution === "internal") {
-        return candidates.filter(isInternalBackend);
+        return usableCandidates.filter(isInternalBackend);
     }
     if (execution === "external") {
-        return candidates.filter((backend) => !isInternalBackend(backend));
+        return usableCandidates.filter((backend) => !isInternalBackend(backend));
     }
-    return candidates;
+    return usableCandidates;
 }
 function isBackendUnavailable(error) {
     if (error instanceof RastermillUnavailableError) {
@@ -1063,9 +1073,9 @@ function isBackendUnavailable(error) {
         detail.includes("support for this compression format has not been built in") ||
         detail.includes("unsupported image format"));
 }
-async function runWithBackends(format, options, fn) {
+async function runWithBackends(format, options, backendOptions, fn) {
     const errors = [];
-    const backends = backendsForFormat(format, options.execution);
+    const backends = backendsForFormat(format, options.execution, backendOptions);
     for (const backend of backends) {
         try {
             return await fn(backend);
@@ -1201,6 +1211,12 @@ function convertResizeArgs(native) {
         ];
     }
     return ["-resize", buildConvertResizeGeometry(native.target, native.fit)];
+}
+function convertStripArgs() {
+    return ["-strip"];
+}
+function ffmpegStripArgs() {
+    return ["-map_metadata", "-1"];
 }
 function sipsOrientationArgs(orientation) {
     switch (orientation) {
@@ -1393,6 +1409,7 @@ async function externalToJpeg(backend, buffer, native, options) {
                 "-y",
                 "-i",
                 input,
+                ...ffmpegStripArgs(),
                 "-vf",
                 buildFfmpegResizeFilter(native.target, native.fit),
                 "-frames:v",
@@ -1403,7 +1420,14 @@ async function externalToJpeg(backend, buffer, native, options) {
             ], options, native.signal);
             return await workspace.read("out.jpg");
         }
-        const args = [firstImageScene(tool, input), ...convertResizeArgs(native), "-quality", String(quality), output];
+        const args = [
+            firstImageScene(tool, input),
+            ...convertResizeArgs(native),
+            ...convertStripArgs(),
+            "-quality",
+            String(quality),
+            output,
+        ];
         if (native.autoOrient !== false) {
             args.splice(1, 0, "-auto-orient");
         }
@@ -1429,6 +1453,7 @@ async function externalToPng(backend, buffer, native, options) {
         if (native.compressionLevel !== undefined && tool.flavor !== "gm") {
             args.push("-define", `png:compression-level=${clampInteger(native.compressionLevel, 0, 9)}`);
         }
+        args.push(...convertStripArgs());
         args.push(output);
         await runConvertTool(tool, args, options, native.signal);
         return await workspace.read("out.png");
@@ -1448,6 +1473,7 @@ async function externalToWebp(backend, buffer, native, options) {
                 "-y",
                 "-i",
                 input,
+                ...ffmpegStripArgs(),
                 "-vf",
                 buildFfmpegResizeFilter(native.target, native.fit),
                 "-frames:v",
@@ -1461,6 +1487,7 @@ async function externalToWebp(backend, buffer, native, options) {
         const args = [
             firstImageScene(tool, input),
             ...convertResizeArgs(native),
+            ...convertStripArgs(),
             "-quality",
             String(quality),
             output,
@@ -1486,7 +1513,17 @@ async function externalConvertToJpeg(backend, buffer, options, jpegOptions = {})
         const input = await workspace.write("in.img", oriented);
         const output = workspace.path("out.jpg");
         if (tool.flavor === "sips") {
-            await runTool(tool.command, ["-s", "format", "jpeg", "-s", "formatOptions", String(quality), input, "--out", output], options, jpegOptions.signal);
+            await runTool(tool.command, [
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                String(quality),
+                input,
+                "--out",
+                output,
+            ], options, jpegOptions.signal);
         }
         else if (tool.flavor === "powershell") {
             throw new Error("Windows native image backend does not convert HEIC to JPEG");
@@ -1496,6 +1533,7 @@ async function externalConvertToJpeg(backend, buffer, options, jpegOptions = {})
                 "-y",
                 "-i",
                 input,
+                ...ffmpegStripArgs(),
                 "-frames:v",
                 "1",
                 "-q:v",
@@ -1508,7 +1546,7 @@ async function externalConvertToJpeg(backend, buffer, options, jpegOptions = {})
             if (autoOrient) {
                 args.push("-auto-orient");
             }
-            args.push("-quality", String(quality), output);
+            args.push(...convertStripArgs(), "-quality", String(quality), output);
             await runConvertTool(tool, args, options, jpegOptions.signal);
         }
         return await workspace.read("out.jpg");
@@ -1521,14 +1559,67 @@ function readRequiredEncodedMetadata(data, format) {
     }
     return metadata;
 }
-function encodedImage(data, format) {
-    const metadata = readRequiredEncodedMetadata(data, format);
+function stripJpegMetadata(data) {
+    if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) {
+        return data;
+    }
+    const chunks = [data.subarray(0, 2)];
+    let offset = 2;
+    while (offset + 1 < data.length) {
+        if (data[offset] !== 0xff) {
+            chunks.push(data.subarray(offset));
+            break;
+        }
+        let markerOffset = offset;
+        while (markerOffset < data.length && data[markerOffset] === 0xff) {
+            markerOffset += 1;
+        }
+        if (markerOffset >= data.length) {
+            break;
+        }
+        const marker = data[markerOffset] ?? 0;
+        const segmentStart = offset;
+        const payloadStart = markerOffset + 1;
+        if (marker === 0xda) {
+            chunks.push(data.subarray(segmentStart));
+            break;
+        }
+        if (marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+            chunks.push(data.subarray(segmentStart, payloadStart));
+            offset = payloadStart;
+            continue;
+        }
+        if (payloadStart + 2 > data.length) {
+            chunks.push(data.subarray(segmentStart));
+            break;
+        }
+        const length = data.readUInt16BE(payloadStart);
+        const segmentEnd = payloadStart + length;
+        if (length < 2 || segmentEnd > data.length) {
+            chunks.push(data.subarray(segmentStart));
+            break;
+        }
+        const isMetadataSegment = (marker >= 0xe0 && marker <= 0xef) || marker === 0xfe;
+        if (!isMetadataSegment) {
+            chunks.push(data.subarray(segmentStart, segmentEnd));
+        }
+        offset = segmentEnd;
+    }
+    return chunks.length === 1 ? data : Buffer.concat(chunks);
+}
+function normalizeMetadataPolicy(policy) {
+    return policy ?? "strip";
+}
+function encodedImage(data, format, metadataStatus) {
+    const output = metadataStatus === "stripped" && format === "jpeg" ? stripJpegMetadata(data) : data;
+    const metadata = readRequiredEncodedMetadata(output, format);
     return {
-        data,
+        data: output,
         format,
         width: metadata.width,
         height: metadata.height,
-        bytes: data.length,
+        bytes: output.length,
+        metadata: metadataStatus,
     };
 }
 function hasExplicitEncodeWork(format, options) {
@@ -1538,9 +1629,12 @@ function hasExplicitEncodeWork(format, options) {
     if (format === "png") {
         return options.format === "png" && options.compressionLevel !== undefined;
     }
-    return false;
+    return options.format === "webp" && options.quality !== undefined;
 }
 function canReuseInputEncoding(buffer, format, header, resize, options) {
+    if (normalizeMetadataPolicy(options.metadata) !== "preserve") {
+        return false;
+    }
     if (!header || header.format !== format || hasExplicitEncodeWork(format, options)) {
         return false;
     }
@@ -1565,6 +1659,7 @@ function encodeBestFormatOptions(formatOptions, options) {
         ...(options.resize === undefined ? {} : { resize: options.resize }),
         ...(options.autoOrient === undefined ? {} : { autoOrient: options.autoOrient }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
     };
 }
 function encodeBestWithinBytesOptions(formatOptions, options) {
@@ -1574,16 +1669,16 @@ function encodeBestWithinBytesOptions(formatOptions, options) {
         ...(options.search === undefined ? {} : { search: options.search }),
     };
 }
-async function imageHasAlphaChannel(rastermill, buffer, header) {
+async function inspectImageTransparency(rastermill, buffer, header) {
     if (header?.hasAlpha === false) {
-        return false;
+        return { hasAlphaChannel: false, hasTransparentPixels: false };
     }
     try {
-        return (await rastermill.transparency(buffer)).hasAlphaChannel;
+        return await rastermill.transparency(buffer);
     }
     catch (error) {
         if (isRastermillUnavailableError(error) && header?.hasAlpha === true) {
-            return true;
+            return { hasAlphaChannel: true, hasTransparentPixels: true };
         }
         throw error;
     }
@@ -1660,21 +1755,21 @@ function createProcessor(options) {
             const resize = normalizeResizeOptions(encodeOptions.resize, orientedMetadata);
             assertOutputPixelBudget(orientedMetadata, resize, options.maxOutputPixels);
             if (canReuseInputEncoding(buffer, encodeOptions.format, header, resize, encodeOptions)) {
-                return encodedImage(buffer, encodeOptions.format);
+                return encodedImage(buffer, encodeOptions.format, "preserved");
             }
-            return await runWithBackends(encodeOptions.format, options, async (backend) => {
+            return await runWithBackends(encodeOptions.format, options, { webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined }, async (backend) => {
                 if (backend === "photon") {
                     const { photon, image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels, encodeOptions.autoOrient !== false);
                     const resized = resizePhotonImage(photon, image, resize);
                     try {
                         if (encodeOptions.format === "jpeg") {
-                            return encodedImage(Buffer.from(resized.get_bytes_jpeg(encodeOptions.quality ?? DEFAULT_JPEG_QUALITY)), "jpeg");
+                            return encodedImage(Buffer.from(resized.get_bytes_jpeg(encodeOptions.quality ?? DEFAULT_JPEG_QUALITY)), "jpeg", "stripped");
                         }
                         if (encodeOptions.format === "webp") {
-                            return encodedImage(Buffer.from(resized.get_bytes_webp()), "webp");
+                            return encodedImage(Buffer.from(resized.get_bytes_webp()), "webp", "stripped");
                         }
                         if (encodeOptions.format === "png") {
-                            return encodedImage(encodePngRgba(resized.get_raw_pixels(), resized.get_width(), resized.get_height(), encodeOptions.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL), "png");
+                            return encodedImage(encodePngRgba(resized.get_raw_pixels(), resized.get_width(), resized.get_height(), encodeOptions.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL), "png", "stripped");
                         }
                     }
                     finally {
@@ -1694,6 +1789,7 @@ function createProcessor(options) {
                                 ? {}
                                 : { autoOrient: encodeOptions.autoOrient }),
                             ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+                            metadata: normalizeMetadataPolicy(encodeOptions.metadata),
                         }, options)
                         : await externalConvertToJpeg(nativeBackend, buffer, options, {
                             ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
@@ -1702,7 +1798,7 @@ function createProcessor(options) {
                                 : { autoOrient: encodeOptions.autoOrient }),
                             ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
                         });
-                    return encodedImage(jpeg, "jpeg");
+                    return encodedImage(jpeg, "jpeg", "stripped");
                 }
                 if (encodeOptions.format === "webp") {
                     if (backend === "imagemagick" || backend === "graphicsmagick" || backend === "ffmpeg") {
@@ -1711,8 +1807,10 @@ function createProcessor(options) {
                             ...(encodeOptions.autoOrient === undefined
                                 ? {}
                                 : { autoOrient: encodeOptions.autoOrient }),
+                            ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
                             ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-                        }, options), "webp");
+                            metadata: normalizeMetadataPolicy(encodeOptions.metadata),
+                        }, options), "webp", "stripped");
                     }
                     throw new Error(`Image backend ${backend} is not available for WebP encoding`);
                 }
@@ -1728,7 +1826,8 @@ function createProcessor(options) {
                             ? {}
                             : { autoOrient: encodeOptions.autoOrient }),
                         ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-                    }, options), "png");
+                        metadata: normalizeMetadataPolicy(encodeOptions.metadata),
+                    }, options), "png", "stripped");
                 }
                 throw new Error(`Image backend ${backend} is not available for PNG encoding`);
             });
@@ -1755,7 +1854,9 @@ function createProcessor(options) {
             let smallest = null;
             let firstEncodeError;
             for (const side of maxSides) {
-                for (const quality of encodeOptions.format === "jpeg" ? qualities : [undefined]) {
+                for (const quality of encodeOptions.format === "jpeg" || encodeOptions.format === "webp"
+                    ? qualities
+                    : [undefined]) {
                     for (const compressionLevel of encodeOptions.format === "png"
                         ? compressionLevels
                         : [undefined]) {
@@ -1775,6 +1876,7 @@ function createProcessor(options) {
                                     })
                                     : await rastermill.encode(buffer, {
                                         ...encodeOptions,
+                                        ...(quality === undefined ? {} : { quality }),
                                         resize: nextResize,
                                     });
                             const withinBudget = out.bytes <= maxBytes;
@@ -1812,14 +1914,14 @@ function createProcessor(options) {
             const buffer = toBuffer(input);
             const encodeOptions = encodeBestOptions(rawOptions);
             const header = readImageProbeFromHeader(buffer);
-            const hasAlpha = encodeOptions.transparency === "flatten"
-                ? false
-                : await imageHasAlphaChannel(rastermill, buffer, header);
-            const useTransparent = hasAlpha && encodeOptions.transparency !== "flatten";
+            const alpha = encodeOptions.transparency === "flatten"
+                ? { hasAlphaChannel: false, hasTransparentPixels: false }
+                : await inspectImageTransparency(rastermill, buffer, header);
+            const useTransparent = alpha.hasTransparentPixels && encodeOptions.transparency !== "flatten";
             const firstFormat = useTransparent ? encodeOptions.transparent : encodeOptions.opaque;
             const firstTransparency = useTransparent
                 ? "preserved"
-                : hasAlpha
+                : alpha.hasAlphaChannel
                     ? "flattened"
                     : "not-present";
             if (encodeOptions.maxBytes === undefined) {
@@ -1838,11 +1940,12 @@ function createProcessor(options) {
                 ...encodeOptions,
                 maxBytes,
             }));
-            return bestChosen(flattened, hasAlpha ? "flattened" : "not-present");
+            return bestChosen(flattened, alpha.hasAlphaChannel ? "flattened" : "not-present");
         },
     };
     return rastermill;
 }
+/** Create a Rastermill processor with explicit execution, safety limits, temp, timeout, and command-resolution settings. */
 export function createRastermill(options = {}) {
     return createProcessor(normalizeOptions(options));
 }
@@ -1851,18 +1954,23 @@ function getDefaultRastermill() {
     defaultRastermill ??= createRastermill();
     return defaultRastermill;
 }
+/** Default-instance `probe`. Use `createRastermill` for custom limits or execution boundaries. */
 export async function probe(input) {
     return await getDefaultRastermill().probe(input);
 }
+/** Default-instance `transparency`. Uses Photon only and does not spawn native tools. */
 export async function transparency(input) {
     return await getDefaultRastermill().transparency(input);
 }
+/** Default-instance `encode`. Metadata is stripped unless `metadata: "preserve"` can return the original bytes unchanged. */
 export async function encode(input, options) {
     return await getDefaultRastermill().encode(input, options);
 }
+/** Default-instance `encodeWithinBytes`. WebP quality search requires an external backend. */
 export async function encodeWithinBytes(input, options) {
     return await getDefaultRastermill().encodeWithinBytes(input, options);
 }
+/** Default-instance `encodeBest`. Uses transparent pixels, not merely alpha-channel presence, to choose flattening. */
 export async function encodeBest(input, options) {
     return await getDefaultRastermill().encodeBest(input, options);
 }

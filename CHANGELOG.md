@@ -5,6 +5,7 @@
 - Add `transparency(input)` for alpha-channel and transparent-pixel inspection across common raster formats.
 - Add `execution: "auto" | "internal" | "external"` so callers can keep work in-process, force native tools, or use automatic fallback.
 - Collapse writing into `encode(input, options?)` for exact formats, auto format choice, dimension limits, and byte-budget search.
+- Remove the documented `encodeWithinBytes` export; migrate `encodeWithinBytes(input, { maxBytes, ...options })` to `encode(input, { maxBytes, ...options })`.
 - Add metadata policy controls: transformed outputs strip metadata by default; no-op within-limit auto encodes preserve original bytes unless callers pass `metadata: "strip"`.
 - Improve default byte-budget searches so small dimension limits can keep downscaling without explicit `search.maxSide`.
 - Keep Photon loading lazy, including default-instance and external-execution paths.

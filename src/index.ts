@@ -259,10 +259,7 @@ export type Rastermill = {
 
 type RastermillInternal = Rastermill & {
   encodeDirect(input: ImageInput, options: SpecificEncodeOptions): Promise<EncodedImage>;
-  encodeWithBudget(
-    input: ImageInput,
-    options: BudgetEncodeOptions,
-  ): Promise<BudgetEncodedImage>;
+  encodeWithBudget(input: ImageInput, options: BudgetEncodeOptions): Promise<BudgetEncodedImage>;
   encodeAuto(input: ImageInput, options?: AutoPolicyEncodeOptions): Promise<AutoEncodedImage>;
   encodeWithLimits(input: ImageInput, options: LimitEncodeOptions): Promise<AutoEncodedImage>;
 };
@@ -1263,7 +1260,7 @@ type NormalizedResizeOptions = {
 
 function normalizeResizeOptions(
   resize: ResizeOptions | undefined,
-  metadata: ImageMetadata,
+  _metadata: ImageMetadata,
 ): NormalizedResizeOptions {
   if (!resize) {
     return {
@@ -1501,12 +1498,7 @@ async function readPhotonTransparency(
   header: ImageProbe,
   maxInputPixels: number,
 ): Promise<ImageTransparency> {
-  const { image } = await loadOrientedPhotonImage(
-    buffer,
-    maxInputPixels,
-    false,
-    "transparency",
-  );
+  const { image } = await loadOrientedPhotonImage(buffer, maxInputPixels, false, "transparency");
   try {
     const hasTransparentPixels = scanRgbaTransparency(image.get_raw_pixels());
     return {
@@ -1545,10 +1537,7 @@ export function encodePngRgba(
   normalizePositiveInteger(width, "width");
   normalizePositiveInteger(height, "height");
   if (pixels.byteLength !== width * height * 4) {
-    throw rastermillError(
-      "RASTERMILL_BAD_OPTION",
-      "pixels length must equal width * height * 4",
-    );
+    throw rastermillError("RASTERMILL_BAD_OPTION", "pixels length must equal width * height * 4");
   }
   const stride = width * 4;
   const raw = Buffer.alloc((stride + 1) * height);
@@ -2031,18 +2020,18 @@ async function externalToJpeg(
               output,
             ]
           : [
-          "-z",
-          String(native.target.height),
-          String(native.target.width),
-          "-s",
-          "format",
-          "jpeg",
-          "-s",
-          "formatOptions",
-          String(quality),
-          input,
-          "--out",
-          output,
+              "-z",
+              String(native.target.height),
+              String(native.target.width),
+              "-s",
+              "format",
+              "jpeg",
+              "-s",
+              "formatOptions",
+              String(quality),
+              input,
+              "--out",
+              output,
             ];
       await runTool(tool.command, args, options, native.signal);
       return await workspace.read("out.jpg");
@@ -2195,17 +2184,7 @@ async function externalConvertToJpeg(
     if (tool.flavor === "sips") {
       await runTool(
         tool.command,
-        [
-          "-s",
-          "format",
-          "jpeg",
-          "-s",
-          "formatOptions",
-          String(quality),
-          input,
-          "--out",
-          output,
-        ],
+        ["-s", "format", "jpeg", "-s", "formatOptions", String(quality), input, "--out", output],
         options,
         jpegOptions.signal,
       );
@@ -2326,7 +2305,10 @@ function encodedImage(
   };
 }
 
-function hasExplicitEncodeWork(format: EncodedImageFormat, options: SpecificEncodeOptions): boolean {
+function hasExplicitEncodeWork(
+  format: EncodedImageFormat,
+  options: SpecificEncodeOptions,
+): boolean {
   if (format === "jpeg") {
     return options.format === "jpeg" && options.quality !== undefined;
   }
@@ -2357,9 +2339,9 @@ function canReuseInputEncoding(
   return target.width === header.width && target.height === header.height;
 }
 
-function encodeAutoOptions(options: AutoPolicyEncodeOptions | undefined): Required<
-  Pick<AutoPolicyEncodeOptions, "opaque" | "transparent" | "transparency">
-> &
+function encodeAutoOptions(
+  options: AutoPolicyEncodeOptions | undefined,
+): Required<Pick<AutoPolicyEncodeOptions, "opaque" | "transparent" | "transparency">> &
   Omit<AutoPolicyEncodeOptions, "opaque" | "transparent" | "transparency"> {
   return {
     ...options,
@@ -2369,9 +2351,9 @@ function encodeAutoOptions(options: AutoPolicyEncodeOptions | undefined): Requir
   };
 }
 
-function encodeWithLimitsOptions(options: LimitEncodeOptions): Required<
-  Pick<LimitEncodeOptions, "opaque" | "transparent" | "transparency">
-> &
+function encodeWithLimitsOptions(
+  options: LimitEncodeOptions,
+): Required<Pick<LimitEncodeOptions, "opaque" | "transparent" | "transparency">> &
   Omit<LimitEncodeOptions, "opaque" | "transparent" | "transparency"> {
   return {
     ...options,
@@ -2507,8 +2489,7 @@ function bestChosen(
   out: EncodedImage | BudgetEncodedImage,
   transparency: NonNullable<AutoEncodedImage["chosen"]["transparency"]>,
 ): AutoEncodedImage {
-  const withinBudget =
-    "withinBudget" in out ? { withinBudget: out.withinBudget } : {};
+  const withinBudget = "withinBudget" in out ? { withinBudget: out.withinBudget } : {};
   return {
     ...out,
     ...withinBudget,
@@ -2691,52 +2672,66 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         options,
         { webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined },
         async (backend) => {
-        if (backend === "photon") {
-          const { photon, image } = await loadOrientedPhotonImage(
-            buffer,
-            options.maxInputPixels,
-            encodeOptions.autoOrient !== false,
-          );
-          const resized = resizePhotonImage(photon, image, resize);
-          try {
-            if (encodeOptions.format === "jpeg") {
-              return encodedImage(
-                Buffer.from(resized.get_bytes_jpeg(encodeOptions.quality ?? DEFAULT_JPEG_QUALITY)),
-                "jpeg",
-                "stripped",
-              );
-            }
-            if (encodeOptions.format === "webp") {
-              if (typeof resized.get_bytes_webp !== "function") {
-                throw new Error("Photon did not expose WebP encoding");
+          if (backend === "photon") {
+            const { photon, image } = await loadOrientedPhotonImage(
+              buffer,
+              options.maxInputPixels,
+              encodeOptions.autoOrient !== false,
+            );
+            const resized = resizePhotonImage(photon, image, resize);
+            try {
+              if (encodeOptions.format === "jpeg") {
+                return encodedImage(
+                  Buffer.from(
+                    resized.get_bytes_jpeg(encodeOptions.quality ?? DEFAULT_JPEG_QUALITY),
+                  ),
+                  "jpeg",
+                  "stripped",
+                );
               }
-              return encodedImage(Buffer.from(resized.get_bytes_webp()), "webp", "stripped");
+              if (encodeOptions.format === "webp") {
+                if (typeof resized.get_bytes_webp !== "function") {
+                  throw new Error("Photon did not expose WebP encoding");
+                }
+                return encodedImage(Buffer.from(resized.get_bytes_webp()), "webp", "stripped");
+              }
+              if (encodeOptions.format === "png") {
+                return encodedImage(
+                  encodePngRgba(
+                    resized.get_raw_pixels(),
+                    resized.get_width(),
+                    resized.get_height(),
+                    encodeOptions.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
+                  ),
+                  "png",
+                  "stripped",
+                );
+              }
+            } finally {
+              resized.free();
             }
-            if (encodeOptions.format === "png") {
-              return encodedImage(
-                encodePngRgba(
-                  resized.get_raw_pixels(),
-                  resized.get_width(),
-                  resized.get_height(),
-                  encodeOptions.compressionLevel ?? DEFAULT_PNG_COMPRESSION_LEVEL,
-                ),
-                "png",
-                "stripped",
-              );
-            }
-          } finally {
-            resized.free();
           }
-        }
-        const nativeBackend = backend as Exclude<ImageBackend, "photon">;
-        if (encodeOptions.format === "jpeg") {
-          // No resize means a straight decode-and-encode (e.g. HEIC/AVIF to JPEG).
-          const jpeg = encodeOptions.resize
-            ? await externalToJpeg(
-                nativeBackend,
-                buffer,
-                {
-                  ...nativeResizeOptions(orientedMetadata, resize),
+          const nativeBackend = backend as Exclude<ImageBackend, "photon">;
+          if (encodeOptions.format === "jpeg") {
+            // No resize means a straight decode-and-encode (e.g. HEIC/AVIF to JPEG).
+            const jpeg = encodeOptions.resize
+              ? await externalToJpeg(
+                  nativeBackend,
+                  buffer,
+                  {
+                    ...nativeResizeOptions(orientedMetadata, resize),
+                    ...(encodeOptions.quality === undefined
+                      ? {}
+                      : { quality: encodeOptions.quality }),
+                    ...(encodeOptions.autoOrient === undefined
+                      ? {}
+                      : { autoOrient: encodeOptions.autoOrient }),
+                    ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+                    metadata: normalizeMetadataPolicy(encodeOptions.metadata),
+                  },
+                  options,
+                )
+              : await externalConvertToJpeg(nativeBackend, buffer, options, {
                   ...(encodeOptions.quality === undefined
                     ? {}
                     : { quality: encodeOptions.quality }),
@@ -2744,70 +2739,63 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                     ? {}
                     : { autoOrient: encodeOptions.autoOrient }),
                   ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-                  metadata: normalizeMetadataPolicy(encodeOptions.metadata),
-                },
-                options,
-              )
-            : await externalConvertToJpeg(nativeBackend, buffer, options, {
-                ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
-                ...(encodeOptions.autoOrient === undefined
-                  ? {}
-                  : { autoOrient: encodeOptions.autoOrient }),
-                ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-              });
-          return encodedImage(jpeg, "jpeg", "stripped");
-        }
-        if (encodeOptions.format === "webp") {
-          if (backend === "imagemagick" || backend === "graphicsmagick" || backend === "ffmpeg") {
+                });
+            return encodedImage(jpeg, "jpeg", "stripped");
+          }
+          if (encodeOptions.format === "webp") {
+            if (backend === "imagemagick" || backend === "graphicsmagick" || backend === "ffmpeg") {
+              return encodedImage(
+                await externalToWebp(
+                  backend,
+                  buffer,
+                  {
+                    ...nativeResizeOptions(orientedMetadata, resize),
+                    ...(encodeOptions.autoOrient === undefined
+                      ? {}
+                      : { autoOrient: encodeOptions.autoOrient }),
+                    ...(encodeOptions.quality === undefined
+                      ? {}
+                      : { quality: encodeOptions.quality }),
+                    ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+                    metadata: normalizeMetadataPolicy(encodeOptions.metadata),
+                  },
+                  options,
+                ),
+                "webp",
+                "stripped",
+              );
+            }
+            throw new Error(`Image backend ${backend} is not available for WebP encoding`);
+          }
+          if (
+            backend === "windows-native" ||
+            backend === "imagemagick" ||
+            backend === "graphicsmagick"
+          ) {
             return encodedImage(
-              await externalToWebp(
+              await externalToPng(
                 backend,
                 buffer,
                 {
                   ...nativeResizeOptions(orientedMetadata, resize),
+                  ...(encodeOptions.compressionLevel === undefined
+                    ? {}
+                    : { compressionLevel: encodeOptions.compressionLevel }),
                   ...(encodeOptions.autoOrient === undefined
                     ? {}
                     : { autoOrient: encodeOptions.autoOrient }),
-                  ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
                   ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
                   metadata: normalizeMetadataPolicy(encodeOptions.metadata),
                 },
                 options,
               ),
-              "webp",
+              "png",
               "stripped",
             );
           }
-          throw new Error(`Image backend ${backend} is not available for WebP encoding`);
-        }
-        if (
-          backend === "windows-native" ||
-          backend === "imagemagick" ||
-          backend === "graphicsmagick"
-        ) {
-          return encodedImage(
-            await externalToPng(
-              backend,
-              buffer,
-              {
-                ...nativeResizeOptions(orientedMetadata, resize),
-                ...(encodeOptions.compressionLevel === undefined
-                  ? {}
-                  : { compressionLevel: encodeOptions.compressionLevel }),
-                ...(encodeOptions.autoOrient === undefined
-                  ? {}
-                  : { autoOrient: encodeOptions.autoOrient }),
-                ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-                metadata: normalizeMetadataPolicy(encodeOptions.metadata),
-              },
-              options,
-            ),
-            "png",
-            "stripped",
-          );
-        }
-        throw new Error(`Image backend ${backend} is not available for PNG encoding`);
-      });
+          throw new Error(`Image backend ${backend} is not available for PNG encoding`);
+        },
+      );
       return withResizeStatus(out, orientedMetadata, resize);
     },
 
@@ -2904,8 +2892,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         buffer,
         header,
       );
-      const useTransparent =
-        alpha.hasTransparentPixels && encodeOptions.transparency !== "flatten";
+      const useTransparent = alpha.hasTransparentPixels && encodeOptions.transparency !== "flatten";
       const firstFormat = useTransparent ? encodeOptions.transparent : encodeOptions.opaque;
       const firstTransparency = useTransparent
         ? "preserved"
@@ -2961,11 +2948,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         encodeOptions.transparency !== "flatten" &&
         header
       ) {
-        if (
-          header.format === "jpeg" ||
-          header.format === "png" ||
-          header.format === "webp"
-        ) {
+        if (header.format === "jpeg" || header.format === "png" || header.format === "webp") {
           const out = await rastermill.encodeDirect(buffer, {
             format: header.format,
             ...(encodeOptions.autoOrient === undefined

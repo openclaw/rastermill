@@ -72,7 +72,9 @@ function outPathForMarkdown(rel) {
 function pageHref(targetRel, currentRel) {
   const targetOut = outPathForMarkdown(targetRel);
   const currentOut = outPathForMarkdown(currentRel);
-  return path.posix.relative(path.posix.dirname(currentOut), targetOut) || path.posix.basename(targetOut);
+  return (
+    path.posix.relative(path.posix.dirname(currentOut), targetOut) || path.posix.basename(targetOut)
+  );
 }
 
 function markdownToHtml(markdown, currentRel) {
@@ -176,7 +178,10 @@ function markdownToHtml(markdown, currentRel) {
       }
       html.push(
         `<div class="table-wrap"><table><thead><tr>${header.map((cell) => `<th>${inline(cell, currentRel)}</th>`).join("")}</tr></thead><tbody>${rows
-          .map((row) => `<tr>${row.map((cell) => `<td>${inline(cell, currentRel)}</td>`).join("")}</tr>`)
+          .map(
+            (row) =>
+              `<tr>${row.map((cell) => `<td>${inline(cell, currentRel)}</td>`).join("")}</tr>`,
+          )
           .join("")}</tbody></table></div>`,
       );
       continue;
@@ -241,9 +246,16 @@ function inline(text, currentRel) {
   out = escapeHtml(out)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${escapeAttr(rewriteHref(href, currentRel))}">${label}</a>`)
+    .replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      (_, label, href) => `<a href="${escapeAttr(rewriteHref(href, currentRel))}">${label}</a>`,
+    )
     .replace(/&lt;(https?:\/\/[^\s<>]+)&gt;/g, '<a href="$1">$1</a>');
-  return out.replace(/\u0000(\d+)\u0000/g, (_, index) => stash[Number(index)]);
+  const stashMarker = String.fromCharCode(0);
+  return out.replace(
+    new RegExp(`${stashMarker}(\\d+)${stashMarker}`, "g"),
+    (_, index) => stash[Number(index)],
+  );
 }
 
 function rewriteHref(href, currentRel) {
@@ -266,7 +278,10 @@ function tocFromHtml(html) {
     items.push({
       level: Number(match[1]),
       id: match[2],
-      text: match[3].replace(/<a class="anchor"[^>]*>.*?<\/a>/, "").replace(/<[^>]+>/g, "").trim(),
+      text: match[3]
+        .replace(/<a class="anchor"[^>]*>.*?<\/a>/, "")
+        .replace(/<[^>]+>/g, "")
+        .trim(),
     });
   }
   if (items.length < 2) return "";
@@ -277,8 +292,12 @@ function tocFromHtml(html) {
 
 function layout({ page, html, toc, prev, next, sectionName }) {
   const home = page.rel === "README.md";
-  const title = home ? `${productName} — ${productTagline}` : `${stripBackticks(page.title)} — ${productName}`;
-  const description = home ? productDescription : `${stripBackticks(page.title)} documentation for Rastermill.`;
+  const title = home
+    ? `${productName} — ${productTagline}`
+    : `${stripBackticks(page.title)} — ${productName}`;
+  const description = home
+    ? productDescription
+    : `${stripBackticks(page.title)} documentation for Rastermill.`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -364,13 +383,16 @@ function standardHero(page, sectionName) {
 
 function navHtml(currentPage) {
   return navSections
-    .map(([section, rels]) => `<section><h2>${escapeHtml(section)}</h2>${rels
-      .map((rel) => {
-        const page = pageByRel.get(rel);
-        const active = page?.rel === currentPage.rel ? " active" : "";
-        return `<a class="nav-link${active}" href="${pageHref(rel, currentPage.rel)}">${escapeHtml(navTitle(page))}</a>`;
-      })
-      .join("")}</section>`)
+    .map(
+      ([section, rels]) =>
+        `<section><h2>${escapeHtml(section)}</h2>${rels
+          .map((rel) => {
+            const page = pageByRel.get(rel);
+            const active = page?.rel === currentPage.rel ? " active" : "";
+            return `<a class="nav-link${active}" href="${pageHref(rel, currentPage.rel)}">${escapeHtml(navTitle(page))}</a>`;
+          })
+          .join("")}</section>`,
+    )
     .join("");
 }
 
@@ -529,8 +551,13 @@ function highlightShellLine(line) {
     return stashPlaceholder(stash.length - 1);
   };
   let working = line.replace(/(?:'[^']*'|"[^"]*")/g, (match) => add(match, "hl-s"));
-  working = working.replace(/(^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g, (_, lead, flag) => `${escapeHtml(lead)}${add(flag, "hl-f")}`);
-  working = working.replace(/\b(npm|pnpm|node|rastermill|magick|gm|ffmpeg|sips|curl)\b/g, (match) => add(match, "hl-cmd"));
+  working = working.replace(
+    /(^|\s)(--?[A-Za-z][A-Za-z0-9-]*)/g,
+    (_, lead, flag) => `${escapeHtml(lead)}${add(flag, "hl-f")}`,
+  );
+  working = working.replace(/\b(npm|pnpm|node|rastermill|magick|gm|ffmpeg|sips|curl)\b/g, (match) =>
+    add(match, "hl-cmd"),
+  );
   working = working.replace(/\b(\d+(?:\.\d+)?)\b/g, (match) => add(match, "hl-n"));
   return replaceStash(escapeHtml(working), stash);
 }
@@ -542,7 +569,10 @@ function highlightJs(code) {
     [/`(?:\\.|[^`\\])*`/g, "hl-s"],
     [/"(?:\\.|[^"\\])*"/g, "hl-s"],
     [/'(?:\\.|[^'\\])*'/g, "hl-s"],
-    [/\b(const|let|var|function|return|if|else|for|while|switch|case|break|continue|class|extends|new|import|from|export|default|async|await|try|catch|finally|throw|typeof|instanceof|type|interface|null|undefined|true|false)\b/g, "hl-k"],
+    [
+      /\b(const|let|var|function|return|if|else|for|while|switch|case|break|continue|class|extends|new|import|from|export|default|async|await|try|catch|finally|throw|typeof|instanceof|type|interface|null|undefined|true|false)\b/g,
+      "hl-k",
+    ],
     [/\b(\d+(?:\.\d+)?)\b/g, "hl-n"],
   ]);
 }
@@ -603,7 +633,11 @@ function validateLinks() {
 }
 
 function slug(text) {
-  return text.toLowerCase().replace(/`/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return text
+    .toLowerCase()
+    .replace(/`/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 function stripBackticks(text) {
@@ -611,7 +645,10 @@ function stripBackticks(text) {
 }
 
 function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char],
+  );
 }
 
 function escapeAttr(value) {

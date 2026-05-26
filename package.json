@@ -2,25 +2,32 @@
   "name": "rastermill",
   "version": "0.3.0",
   "description": "Fast, portable image processing for Node agents.",
-  "type": "module",
+  "keywords": [
+    "heic",
+    "image",
+    "jpeg",
+    "photon",
+    "png",
+    "resize",
+    "webp"
+  ],
+  "homepage": "https://rastermill.com/",
+  "bugs": {
+    "url": "https://github.com/openclaw/rastermill/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/rastermill.git"
   },
-  "homepage": "https://rastermill.com/",
-  "bugs": {
-    "url": "https://github.com/openclaw/rastermill/issues"
-  },
-  "keywords": [
-    "image",
-    "resize",
-    "jpeg",
-    "png",
-    "webp",
-    "heic",
-    "photon"
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -28,36 +35,37 @@
       "default": "./dist/index.js"
     }
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "engines": {
-    "node": ">=20"
-  },
-  "packageManager": "pnpm@10.33.3",
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit",
+    "check": "tsgo --noEmit",
     "docs:build": "node scripts/build-docs-site.mjs",
     "docs:check": "pnpm docs:build && git diff --exit-code -- docs/*.html docs/favicon.svg docs/.nojekyll docs/llms.txt && test -z \"$(git ls-files --others --exclude-standard -- docs/*.html docs/favicon.svg docs/.nojekyll docs/llms.txt)\"",
+    "format": "oxfmt .oxfmtrc.json package.json tsconfig.json tsconfig.build.json vitest.config.ts src test scripts",
+    "format:check": "oxfmt --check .oxfmtrc.json package.json tsconfig.json tsconfig.build.json vitest.config.ts src test scripts",
+    "lint": "oxlint src test scripts --tsconfig tsconfig.json --vitest-plugin --no-error-on-unmatched-pattern",
     "prepare": "pnpm build",
     "prepack": "pnpm build",
-    "prepublishOnly": "pnpm check && pnpm test && pnpm build",
-    "test": "vitest run"
+    "prepublishOnly": "pnpm check && pnpm lint && pnpm format:check && pnpm test:coverage && pnpm build",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@silvia-odwyer/photon-node": "0.3.4"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
+    "@typescript/native-preview": "7.0.0-dev.20260526.1",
+    "@vitest/coverage-v8": "^3.2.4",
+    "oxfmt": "^0.52.0",
+    "oxlint": "^1.67.0",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
-  }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.3"
 }

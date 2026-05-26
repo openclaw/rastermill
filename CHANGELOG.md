@@ -8,6 +8,7 @@
 - Remove the documented `encodeWithinBytes` export; migrate `encodeWithinBytes(input, { maxBytes, ...options })` to `encode(input, { maxBytes, ...options })`.
 - Add metadata policy controls: transformed outputs strip metadata by default; no-op within-limit auto encodes preserve original bytes unless callers pass `metadata: "strip"`.
 - Improve default byte-budget searches so small dimension limits can keep downscaling without explicit `search.maxSide`.
+- Add `tsgo`, `oxlint`, `oxfmt`, and an 80% Vitest coverage gate to package validation.
 - Keep Photon loading lazy, including default-instance and external-execution paths.
 - Expand docs for transparency, execution modes, metadata behavior, and unified `encode`.
 

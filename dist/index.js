@@ -818,7 +818,7 @@ async function loadOrientedPhotonImage(buffer, maxInputPixels, autoOrient = true
 function targetSize(image, resize) {
     return scaledDimensions({ width: image.get_width(), height: image.get_height() }, resize);
 }
-function normalizeResizeOptions(resize, metadata) {
+function normalizeResizeOptions(resize, _metadata) {
     if (!resize) {
         return {
             fit: "inside",
@@ -1555,17 +1555,7 @@ async function externalConvertToJpeg(backend, buffer, options, jpegOptions = {})
         const input = await workspace.write("in.img", oriented);
         const output = workspace.path("out.jpg");
         if (tool.flavor === "sips") {
-            await runTool(tool.command, [
-                "-s",
-                "format",
-                "jpeg",
-                "-s",
-                "formatOptions",
-                String(quality),
-                input,
-                "--out",
-                output,
-            ], options, jpegOptions.signal);
+            await runTool(tool.command, ["-s", "format", "jpeg", "-s", "formatOptions", String(quality), input, "--out", output], options, jpegOptions.signal);
         }
         else if (tool.flavor === "powershell") {
             throw new Error("Windows native image backend does not convert HEIC to JPEG");
@@ -1970,7 +1960,9 @@ function createProcessor(options) {
                             metadata: normalizeMetadataPolicy(encodeOptions.metadata),
                         }, options)
                         : await externalConvertToJpeg(nativeBackend, buffer, options, {
-                            ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
+                            ...(encodeOptions.quality === undefined
+                                ? {}
+                                : { quality: encodeOptions.quality }),
                             ...(encodeOptions.autoOrient === undefined
                                 ? {}
                                 : { autoOrient: encodeOptions.autoOrient }),
@@ -1985,7 +1977,9 @@ function createProcessor(options) {
                             ...(encodeOptions.autoOrient === undefined
                                 ? {}
                                 : { autoOrient: encodeOptions.autoOrient }),
-                            ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
+                            ...(encodeOptions.quality === undefined
+                                ? {}
+                                : { quality: encodeOptions.quality }),
                             ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
                             metadata: normalizeMetadataPolicy(encodeOptions.metadata),
                         }, options), "webp", "stripped");
@@ -2126,9 +2120,7 @@ function createProcessor(options) {
                 encodeOptions.maxBytes === undefined &&
                 encodeOptions.transparency !== "flatten" &&
                 header) {
-                if (header.format === "jpeg" ||
-                    header.format === "png" ||
-                    header.format === "webp") {
+                if (header.format === "jpeg" || header.format === "png" || header.format === "webp") {
                     const out = await rastermill.encodeDirect(buffer, {
                         format: header.format,
                         ...(encodeOptions.autoOrient === undefined

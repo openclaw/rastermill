@@ -22,7 +22,7 @@ const rastermill = createRastermill({
 ```
 
 `createRastermill(options?)` returns a `Rastermill` with `probe`,
-`transparency`, `encode`, `encodeWithinBytes`, and `encodeBest`.
+`transparency`, and `encode`.
 
 ## Options
 

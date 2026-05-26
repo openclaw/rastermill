@@ -13,7 +13,7 @@ const productDescription =
 
 const navSections = [
   ["Start", ["README.md", "configuration.md"]],
-  ["API", ["probe.md", "transparency.md", "encode.md", "encode-within-bytes.md"]],
+  ["API", ["probe.md", "transparency.md", "encode.md"]],
   ["Runtime", ["backends.md", "error-handling.md"]],
 ];
 
@@ -377,7 +377,7 @@ function navHtml(currentPage) {
 function navTitle(page) {
   if (!page) return "";
   if (page.rel === "README.md") return "Overview";
-  return stripBackticks(page.title).replace(/^encodeWithinBytes$/, "encodeWithinBytes");
+  return stripBackticks(page.title);
 }
 
 function pageNavHtml(prev, next, current) {

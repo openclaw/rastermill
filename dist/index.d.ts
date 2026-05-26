@@ -82,38 +82,16 @@ export type WebpEncodeOptions = BaseEncodeOptions & {
     format: "webp";
     quality?: number;
 };
-/** Discriminated encode options. Format-specific knobs are only valid on their matching format. */
-export type EncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOptions;
-/** Encoded output bytes plus final dimensions and metadata status. */
-export type EncodedImage = ImageMetadata & {
-    data: Buffer;
-    format: EncodedImageFormat;
-    mimeType: "image/jpeg" | "image/png" | "image/webp";
-    bytes: number;
-    metadata: EncodedImageMetadataStatus;
-};
+/** Concrete-format encode options. Format-specific knobs are only valid on their matching format. */
+export type SpecificEncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOptions;
 /** Search axes for byte-budget encoding. WebP quality search requires external execution. */
 export type EncodeSearchOptions = {
     maxSide?: readonly number[];
     quality?: readonly number[];
     compressionLevel?: readonly number[];
 };
-/** Encode request with a hard byte budget. If no candidate fits, the smallest candidate is returned with `withinBudget: false`. */
-export type EncodeWithinBytesOptions = EncodeOptions & {
-    maxBytes: number;
-    search?: EncodeSearchOptions;
-};
-/** Byte-budget encode result, including the selected search settings. */
-export type EncodedImageWithinBytes = EncodedImage & {
-    withinBudget: boolean;
-    chosen: {
-        maxSide?: number;
-        quality?: number;
-        compressionLevel?: number;
-    };
-};
-/** Format preferences for `encodeBest`. WebP quality requires an external backend. */
-export type EncodeBestFormatOptions = {
+/** Format preferences for `format: "auto"`. WebP quality requires an external backend. */
+export type EncodeFormatPreference = {
     format: "jpeg";
     quality?: number;
 } | {
@@ -123,44 +101,47 @@ export type EncodeBestFormatOptions = {
     format: "webp";
     quality?: number;
 };
-/** Transparency policy for `encodeBest`. `auto` only decodes known alpha-capable internal formats before deciding. */
-export type EncodeBestTransparencyMode = "auto" | "prefer" | "preserve" | "flatten";
-/** Options for automatic opaque-vs-transparent output selection. */
-export type EncodeBestOptions = BaseEncodeOptions & {
-    opaque?: EncodeBestFormatOptions;
-    transparent?: EncodeBestFormatOptions;
-    maxBytes?: number;
-    search?: EncodeSearchOptions;
-    transparency?: EncodeBestTransparencyMode;
-};
-/** `encodeBest` result plus the chosen transparency and search settings. */
-export type EncodedImageBest = EncodedImage & {
-    withinBudget?: boolean;
-    chosen: {
-        transparency: "preserved" | "flattened" | "not-present";
-        maxSide?: number;
-        quality?: number;
-        compressionLevel?: number;
-    };
-};
-/** Dimension limits for `encodeToLimits`. At least one limit must be present. */
+export type TransparentEncodeFormatPreference = Extract<EncodeFormatPreference, {
+    format: "png" | "webp";
+}>;
+/** Transparency policy for `format: "auto"`. `auto` only decodes known alpha-capable internal formats before deciding. */
+export type EncodeTransparencyMode = "auto" | "prefer" | "preserve" | "flatten";
+/** Dimension limits for `encode`. At least one limit must be present when `limits` is supplied. */
 export type ImageDimensionLimits = {
     maxWidth?: number;
     maxHeight?: number;
     maxPixels?: number;
 };
-/** Resize only when dimensions exceed the supplied limits, then delegate to `encodeBest`. */
-export type EncodeToLimitsOptions = BaseEncodeOptions & {
-    limits: ImageDimensionLimits;
-    opaque?: EncodeBestFormatOptions;
-    transparent?: EncodeBestFormatOptions;
+type EncodePolicyOptions = {
     maxBytes?: number;
     search?: EncodeSearchOptions;
-    transparency?: EncodeBestTransparencyMode;
+    limits?: ImageDimensionLimits;
 };
-/** `encodeToLimits` result. `resized` says whether dimension limits forced a resize. */
-export type EncodedImageToLimits = EncodedImageBest & {
+/** Automatic output selection. Opaque images use `opaque`; images with transparent pixels use `transparent`. */
+export type AutoEncodeOptions = BaseEncodeOptions & EncodePolicyOptions & {
+    format?: "auto";
+    opaque?: EncodeFormatPreference;
+    transparent?: TransparentEncodeFormatPreference;
+    transparency?: EncodeTransparencyMode;
+};
+/** Public encode options. Use `format: "jpeg" | "png" | "webp"` for exact output, or `format: "auto"` for policy-driven output. */
+export type EncodeOptions = (SpecificEncodeOptions & EncodePolicyOptions) | AutoEncodeOptions;
+/** Encoded output bytes plus final dimensions, metadata status, and any policy choices Rastermill made. */
+export type EncodedImage = ImageMetadata & {
+    data: Buffer;
+    format: EncodedImageFormat;
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
+    bytes: number;
+    metadata: EncodedImageMetadataStatus;
+    withinBudget?: boolean;
     resized: boolean;
+    chosen: {
+        format: EncodedImageFormat;
+        transparency?: "preserved" | "flattened" | "not-present";
+        maxSide?: number;
+        quality?: number;
+        compressionLevel?: number;
+    };
 };
 /** Rastermill processor instance. Create one when you need custom limits, execution mode, temp roots, or command resolution. */
 export type Rastermill = {
@@ -168,14 +149,8 @@ export type Rastermill = {
     probe(input: ImageInput): Promise<ImageProbe | null>;
     /** Decode enough pixels to distinguish alpha-channel presence from real transparent pixels. Never spawns external tools. */
     transparency(input: ImageInput): Promise<ImageTransparency>;
-    /** Resize/convert/re-encode an image. Metadata is stripped by default; preserve is passthrough-only. */
-    encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
-    /** Search output settings until the result fits `maxBytes`, or return the smallest attempted output. */
-    encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
-    /** Choose an opaque or transparency-preserving output format, optionally under a byte budget. */
-    encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
-    /** Return an image inside max width/height/pixel limits, preserving original bytes when no work is needed and allowed. */
-    encodeToLimits(input: ImageInput, options: EncodeToLimitsOptions): Promise<EncodedImageToLimits>;
+    /** Resize, convert, auto-select format, fit dimension limits, and/or search a byte budget. */
+    encode(input: ImageInput, options?: EncodeOptions): Promise<EncodedImage>;
 };
 type ImageOperation = "encode" | "transparency";
 /** Structured Rastermill error codes. These are stable for external callers. */
@@ -208,12 +183,6 @@ export declare function probe(input: ImageInput): Promise<ImageProbe | null>;
 /** Default-instance `transparency`. Uses Photon only and does not spawn native tools. */
 export declare function transparency(input: ImageInput): Promise<ImageTransparency>;
 /** Default-instance `encode`. Metadata is stripped unless `metadata: "preserve"` can return the original bytes unchanged. */
-export declare function encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
-/** Default-instance `encodeWithinBytes`. WebP quality search requires an external backend. */
-export declare function encodeWithinBytes(input: ImageInput, options: EncodeWithinBytesOptions): Promise<EncodedImageWithinBytes>;
-/** Default-instance `encodeBest`. Uses transparent pixels, not merely alpha-channel presence, to choose flattening. */
-export declare function encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
-/** Default-instance `encodeToLimits`. Returns original encoded bytes when dimensions already fit and preservation is allowed. */
-export declare function encodeToLimits(input: ImageInput, options: EncodeToLimitsOptions): Promise<EncodedImageToLimits>;
+export declare function encode(input: ImageInput, options?: EncodeOptions): Promise<EncodedImage>;
 export {};
 //# sourceMappingURL=index.d.ts.map

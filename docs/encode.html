@@ -85,7 +85,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link active" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link active" href="encode.html">encode</a></section><section><h2>Runtime</h2><a class="nav-link" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
@@ -100,108 +100,154 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       </header>
       <div class="doc-grid">
         <article class="doc"><h1 id="encode"><code>encode</code></h1>
-<p>Resize and re-encode an image to a target format.</p>
-<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encode(input, {
-  format: <span class="hl-s">&quot;jpeg&quot;</span>,            <span class="hl-c">// &quot;jpeg&quot; | &quot;png&quot; | &quot;webp&quot;</span>
+<p><code>encode(input, options?)</code> is Rastermill&#39;s single write path. Options decide whether it performs an exact-format encode, automatic opaque-vs-transparent format selection, byte-budget search, dimension-limit fitting, or a combination of those.</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> jpeg = <span class="hl-k">await</span> rastermill.encode(input, {
+  format: <span class="hl-s">&quot;jpeg&quot;</span>,
   resize: { maxSide: <span class="hl-n">1600</span> },
   quality: <span class="hl-n">85</span>,
 });
-<span class="hl-c">// =&gt; { data: Buffer, format: &quot;jpeg&quot;, mimeType: &quot;image/jpeg&quot;, width, height, bytes, metadata: &quot;stripped&quot; }</span></code></pre>
-<p><code>encode</code> decodes the input, optionally resizes it, bakes in EXIF orientation, and encodes to <code>format</code>. The result carries the output bytes plus the final dimensions, MIME type, and metadata status, so callers never need to re-probe.</p>
-<p>Metadata is stripped by default. <code>metadata: &quot;preserve&quot;</code> is deliberately narrow: it only preserves metadata when Rastermill can return the original bytes unchanged. Photon does not expose EXIF/GPS/ICC/XMP read, write, or copy APIs, so any actual decode, resize, orientation, conversion, or quality/compression change returns fresh bytes with <code>metadata: &quot;stripped&quot;</code>.</p>
-<h2 id="options"><a class="anchor" href="#options" aria-label="Anchor link">#</a>Options</h2>
+<span class="hl-c">// =&gt; { data, format: &quot;jpeg&quot;, mimeType: &quot;image/jpeg&quot;, width, height, bytes, metadata, resized, chosen }</span></code></pre>
+<p>Calling <code>encode(input)</code> or <code>encode(input, { format: &quot;auto&quot; })</code> uses the default automatic policy: opaque output becomes JPEG, transparent output becomes PNG, and transparency is inspected only when the input format makes that useful.</p>
+<h2 id="exact-format"><a class="anchor" href="#exact-format" aria-label="Anchor link">#</a>Exact Format</h2>
+<p>Use <code>format: &quot;jpeg&quot; | &quot;png&quot; | &quot;webp&quot;</code> when the caller wants a specific output format:</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> png = <span class="hl-k">await</span> rastermill.encode(input, {
+  format: <span class="hl-s">&quot;png&quot;</span>,
+  resize: { width: <span class="hl-n">512</span>, height: <span class="hl-n">512</span>, fit: <span class="hl-s">&quot;cover&quot;</span> },
+  compressionLevel: <span class="hl-n">9</span>,
+});</code></pre>
 <pre><code class="language-ts"><span class="hl-k">type</span> EncodeOptions =
   | {
       format: <span class="hl-s">&quot;jpeg&quot;</span>;
       resize?: ResizeOptions;
-      quality?: number;      <span class="hl-c">// 1–100 (default 85)</span>
-      autoOrient?: boolean;  <span class="hl-c">// default true</span>
+      quality?: number; <span class="hl-c">// 1-100, default 85</span>
+      limits?: ImageDimensionLimits;
+      maxBytes?: number;
+      search?: EncodeSearchOptions;
+      autoOrient?: boolean; <span class="hl-c">// default true</span>
       metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
       signal?: AbortSignal;
     }
   | {
       format: <span class="hl-s">&quot;png&quot;</span>;
       resize?: ResizeOptions;
-      compressionLevel?: number; <span class="hl-c">// 0–9 (default 6)</span>
-      autoOrient?: boolean;      <span class="hl-c">// default true</span>
-      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
+      compressionLevel?: number; <span class="hl-c">// 0-9, default 6</span>
+      limits?: ImageDimensionLimits;
+      maxBytes?: number;
+      search?: EncodeSearchOptions;
+      autoOrient?: boolean;
+      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>;
       signal?: AbortSignal;
     }
   | {
       format: <span class="hl-s">&quot;webp&quot;</span>;
       resize?: ResizeOptions;
-      quality?: number;          <span class="hl-c">// 1–100; requires an external backend</span>
-      autoOrient?: boolean;      <span class="hl-c">// default true</span>
-      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
+      quality?: number; <span class="hl-c">// 1-100, requires external execution</span>
+      limits?: ImageDimensionLimits;
+      maxBytes?: number;
+      search?: EncodeSearchOptions;
+      autoOrient?: boolean;
+      metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>;
       signal?: AbortSignal;
     };</code></pre>
 <p>Format-specific options are part of the discriminated union: <code>quality</code> is only valid for JPEG/WebP, and <code>compressionLevel</code> is only valid for PNG. WebP quality requires <code>execution: &quot;auto&quot;</code> with a native backend available, or <code>execution: &quot;external&quot;</code>; Photon&#39;s <code>get_bytes_webp()</code> has no quality parameter.</p>
-<h3 id="resize"><a class="anchor" href="#resize" aria-label="Anchor link">#</a>Resize</h3>
-<pre><code class="language-ts"><span class="hl-k">type</span> ResizeOptions = {
-  fit?: <span class="hl-s">&quot;inside&quot;</span> | <span class="hl-s">&quot;cover&quot;</span> | <span class="hl-s">&quot;fill&quot;</span>;
-  maxSide?: number;          <span class="hl-c">// fit the longest side into this box</span>
-  width?: number;
-  height?: number;
-  enlarge?: boolean;         <span class="hl-c">// default false: never scale up</span>
-};</code></pre>
-<ul>
-<li><strong><code>inside</code></strong> (default) scales to fit within the given box (<code>maxSide</code>, or <code>width</code>/<code>height</code>), preserving aspect ratio.</li>
-<li><strong><code>cover</code></strong> scales to cover the target box, then center-crops. Use <code>maxSide</code> for a square crop, or pass both <code>width</code> and <code>height</code>.</li>
-<li><strong><code>fill</code></strong> stretches to exactly <code>width × height</code>.</li>
-<li>Omit <code>resize</code> entirely to re-encode at the original size — this is how you do a straight format conversion.</li>
-</ul>
-<p>By default the image is never enlarged; set <code>enlarge: true</code> to allow upscaling.</p>
-<h2 id="encodebest"><a class="anchor" href="#encodebest" aria-label="Anchor link">#</a><code>encodeBest</code></h2>
-<p>Use <code>encodeBest</code> when the caller wants Rastermill to choose the output path based on transparency:</p>
-<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encodeBest(input, {
+<h2 id="auto-format"><a class="anchor" href="#auto-format" aria-label="Anchor link">#</a>Auto Format</h2>
+<p>Use <code>format: &quot;auto&quot;</code> when Rastermill should pick between an opaque output and a transparency-preserving output:</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encode(input, {
+  format: <span class="hl-s">&quot;auto&quot;</span>,
   resize: { maxSide: <span class="hl-n">1600</span> },
   opaque: { format: <span class="hl-s">&quot;jpeg&quot;</span>, quality: <span class="hl-n">85</span> },
   transparent: { format: <span class="hl-s">&quot;png&quot;</span>, compressionLevel: <span class="hl-n">9</span> },
-  maxBytes: 500_000,
-  search: {
-    maxSide: [<span class="hl-n">1600</span>, <span class="hl-n">1280</span>, <span class="hl-n">1024</span>],
-    quality: [<span class="hl-n">85</span>, <span class="hl-n">75</span>, <span class="hl-n">65</span>],
-    compressionLevel: [<span class="hl-n">9</span>, <span class="hl-n">8</span>, <span class="hl-n">7</span>],
-  },
-  transparency: <span class="hl-s">&quot;auto&quot;</span>,
-});
-<span class="hl-c">// =&gt; { data, format, width, height, bytes, withinBudget?, chosen }</span></code></pre>
+  transparency: <span class="hl-s">&quot;prefer&quot;</span>,
+});</code></pre>
+<pre><code class="language-ts"><span class="hl-k">type</span> FormatPreference =
+  | { format: <span class="hl-s">&quot;jpeg&quot;</span>; quality?: number }
+  | { format: <span class="hl-s">&quot;png&quot;</span>; compressionLevel?: number }
+  | { format: <span class="hl-s">&quot;webp&quot;</span>; quality?: number };
+
+<span class="hl-k">type</span> TransparentFormatPreference =
+  | { format: <span class="hl-s">&quot;png&quot;</span>; compressionLevel?: number }
+  | { format: <span class="hl-s">&quot;webp&quot;</span>; quality?: number };
+
+<span class="hl-k">type</span> AutoEncodeOptions = {
+  format?: <span class="hl-s">&quot;auto&quot;</span>;
+  opaque?: FormatPreference;
+  transparent?: TransparentFormatPreference;
+  transparency?: <span class="hl-s">&quot;auto&quot;</span> | <span class="hl-s">&quot;prefer&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span> | <span class="hl-s">&quot;flatten&quot;</span>;
+  resize?: ResizeOptions;
+  limits?: ImageDimensionLimits;
+  maxBytes?: number;
+  search?: EncodeSearchOptions;
+  autoOrient?: boolean;
+  metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>;
+  signal?: AbortSignal;
+};</code></pre>
 <p><code>transparency</code> controls alpha handling:</p>
 <ul>
-<li><strong><code>auto</code></strong> inspects transparent pixels only for known in-process alpha-capable formats (<code>png</code>, <code>gif</code>, <code>webp</code>), otherwise uses the header hint and chooses the opaque output.</li>
-<li><strong><code>prefer</code></strong> (default) preserves alpha first, then flattens to the opaque output if a transparent result cannot fit <code>maxBytes</code>.</li>
+<li><strong><code>auto</code></strong> (default) inspects transparent pixels only for known in-process alpha-capable formats (<code>png</code>, <code>gif</code>, <code>webp</code>), otherwise uses the header hint and chooses the opaque output.</li>
+<li><strong><code>prefer</code></strong> preserves alpha first, then flattens to the opaque output if a transparent result cannot fit <code>maxBytes</code>.</li>
 <li><strong><code>preserve</code></strong> never flattens alpha. If no transparent candidate fits, the result is the smallest transparent candidate with <code>withinBudget: false</code>.</li>
 <li><strong><code>flatten</code></strong> always uses the opaque output.</li>
 </ul>
-<p>If <code>maxBytes</code> is omitted, <code>encodeBest</code> does a single encode. If <code>maxBytes</code> is present, it uses the same search semantics as <a href="encode-within-bytes.html"><code>encodeWithinBytes</code></a>.</p>
-<p><code>encodeBest</code> forwards <code>metadata</code>, <code>resize</code>, <code>autoOrient</code>, and <code>signal</code> to the chosen encode path. The same metadata limitation applies: preservation only happens when the final operation can return original bytes unchanged.</p>
-<p><code>chosen.transparency</code> reports what happened to transparent pixels:</p>
+<p><code>chosen.transparency</code> reports what happened:</p>
 <ul>
 <li><strong><code>preserved</code></strong> means a transparent output format was selected.</li>
 <li><strong><code>flattened</code></strong> means the input had an alpha channel or transparent pixels and Rastermill chose the opaque output.</li>
 <li><strong><code>not-present</code></strong> means no alpha was detected from the inspected/header facts.</li>
 </ul>
-<h2 id="encodetolimits"><a class="anchor" href="#encodetolimits" aria-label="Anchor link">#</a><code>encodeToLimits</code></h2>
-<p>Use <code>encodeToLimits</code> when dimensions are the primary constraint:</p>
-<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encodeToLimits(input, {
+<h2 id="byte-budgets"><a class="anchor" href="#byte-budgets" aria-label="Anchor link">#</a>Byte Budgets</h2>
+<p>Add <code>maxBytes</code> to make <code>encode</code> search output settings until the result fits, or return the smallest candidate with <code>withinBudget: false</code>:</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encode(input, {
+  format: <span class="hl-s">&quot;jpeg&quot;</span>,
+  maxBytes: 500_000,
+  search: {
+    maxSide: [<span class="hl-n">1600</span>, <span class="hl-n">1280</span>, <span class="hl-n">1024</span>],
+    quality: [<span class="hl-n">85</span>, <span class="hl-n">75</span>, <span class="hl-n">65</span>],
+  },
+});</code></pre>
+<p>Search axes depend on the output format:</p>
+<ul>
+<li>JPEG/WebP search <code>quality</code> and <code>maxSide</code>.</li>
+<li>PNG searches <code>compressionLevel</code> and <code>maxSide</code>.</li>
+<li>WebP quality search requires an external backend; internal Photon WebP can only participate in resize-only searches.</li>
+</ul>
+<p>The result always includes <code>bytes</code>, <code>withinBudget</code>, and <code>chosen</code> so callers can see what Rastermill selected.</p>
+<h2 id="dimension-limits"><a class="anchor" href="#dimension-limits" aria-label="Anchor link">#</a>Dimension Limits</h2>
+<p>Add <code>limits</code> when dimensions are the primary constraint:</p>
+<pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encode(input, {
+  format: <span class="hl-s">&quot;auto&quot;</span>,
   limits: { maxWidth: <span class="hl-n">4096</span>, maxHeight: <span class="hl-n">4096</span>, maxPixels: 20_000_000 },
   opaque: { format: <span class="hl-s">&quot;jpeg&quot;</span>, quality: <span class="hl-n">92</span> },
   transparent: { format: <span class="hl-s">&quot;png&quot;</span>, compressionLevel: <span class="hl-n">9</span> },
-  transparency: <span class="hl-s">&quot;auto&quot;</span>,
-});
-<span class="hl-c">// =&gt; EncodedImageBest &amp; { resized: boolean }</span></code></pre>
-<p>If the image already fits and the input format is <code>jpeg</code>, <code>png</code>, or <code>webp</code>, Rastermill returns the original bytes by default with <code>metadata: &quot;preserved&quot;</code> and <code>resized: false</code>. Pass <code>metadata: &quot;strip&quot;</code> if even the no-resize path must re-encode. If dimensions exceed the limits, Rastermill computes a non-enlarging inside resize target and delegates to <code>encodeBest</code>.</p>
-<p>At least one of <code>limits.maxWidth</code>, <code>limits.maxHeight</code>, or <code>limits.maxPixels</code> is required. <code>maxBytes</code> and <code>search</code> can also be supplied; they use the same budget search semantics as <code>encodeBest</code>.</p>
-<h2 id="format-conversion-heic-avif-jpeg"><a class="anchor" href="#format-conversion-heic-avif-jpeg" aria-label="Anchor link">#</a>Format conversion (HEIC/AVIF → JPEG)</h2>
+});</code></pre>
+<p>At least one of <code>limits.maxWidth</code>, <code>limits.maxHeight</code>, or <code>limits.maxPixels</code> is required. If the image already fits and the input format is <code>jpeg</code>, <code>png</code>, or <code>webp</code>, auto mode returns the original bytes by default with <code>metadata: &quot;preserved&quot;</code> and <code>resized: false</code>. Pass <code>metadata: &quot;strip&quot;</code> if even the no-resize path must re-encode.</p>
+<p>Exact-format mode may also use <code>limits</code>; Rastermill combines explicit <code>resize</code> with the computed non-enlarging limit resize before encoding.</p>
+<h2 id="resize"><a class="anchor" href="#resize" aria-label="Anchor link">#</a>Resize</h2>
+<pre><code class="language-ts"><span class="hl-k">type</span> ResizeOptions = {
+  fit?: <span class="hl-s">&quot;inside&quot;</span> | <span class="hl-s">&quot;cover&quot;</span> | <span class="hl-s">&quot;fill&quot;</span>;
+  maxSide?: number;
+  width?: number;
+  height?: number;
+  enlarge?: boolean; <span class="hl-c">// default false</span>
+};</code></pre>
+<ul>
+<li><strong><code>inside</code></strong> (default) scales to fit within the given box (<code>maxSide</code>, or <code>width</code>/<code>height</code>), preserving aspect ratio.</li>
+<li><strong><code>cover</code></strong> scales to cover the target box, then center-crops. Use <code>maxSide</code> for a square crop, or pass both <code>width</code> and <code>height</code>.</li>
+<li><strong><code>fill</code></strong> stretches to exactly <code>width x height</code>.</li>
+<li>Omit <code>resize</code> entirely to re-encode at the original size. This is how you do a straight format conversion.</li>
+</ul>
+<p>By default the image is never enlarged; set <code>enlarge: true</code> to allow upscaling.</p>
+<h2 id="metadata"><a class="anchor" href="#metadata" aria-label="Anchor link">#</a>Metadata</h2>
+<p>Metadata is stripped by default. <code>metadata: &quot;preserve&quot;</code> is deliberately narrow: it only preserves metadata when Rastermill can return the original bytes unchanged. Photon does not expose EXIF/GPS/ICC/XMP read, write, or copy APIs, so any actual decode, resize, orientation, conversion, or quality/compression change returns fresh bytes with <code>metadata: &quot;stripped&quot;</code>.</p>
+<h2 id="format-conversion"><a class="anchor" href="#format-conversion" aria-label="Anchor link">#</a>Format Conversion</h2>
 <p>There is no separate convert method. Decode-and-encode is just <code>encode</code> with no resize:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> jpeg = <span class="hl-k">await</span> rastermill.encode(heicBuffer, { format: <span class="hl-s">&quot;jpeg&quot;</span> });</code></pre>
 <p>Photon can&#39;t decode HEIC/AVIF, so <code>execution: &quot;auto&quot;</code> falls through to a native tool (<code>sips</code>, ImageMagick, GraphicsMagick, or ffmpeg). If none is available you get a <a href="error-handling.html"><code>RastermillUnavailableError</code></a>.</p>
 <h2 id="orientation"><a class="anchor" href="#orientation" aria-label="Anchor link">#</a>Orientation</h2>
 <p>JPEG EXIF orientation is applied by default so the output pixels are upright. Pass <code>autoOrient: false</code> to keep the original pixel layout. HEIC/AVIF orientation is delegated to the native backend and may vary by tool.</p>
 <p>Orientation is pixel work, not metadata preservation. If Rastermill applies orientation, the output is re-encoded and reports <code>metadata: &quot;stripped&quot;</code>.</p>
-<h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel budgets</h2>
-<p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="encode-within-bytes.html"><small>Next</small><span>encodeWithinBytes</span></a></nav></article>
-        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#options">Options</a><a class="toc-l3" href="#resize">Resize</a><a class="toc-l2" href="#encodebest">encodeBest</a><a class="toc-l2" href="#encodetolimits">encodeToLimits</a><a class="toc-l2" href="#format-conversion-heic-avif-jpeg">Format conversion (HEIC/AVIF → JPEG)</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel budgets</a></nav>
+<h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel Budgets</h2>
+<p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="backends.html"><small>Next</small><span>Backends</span></a></nav></article>
+        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#exact-format">Exact Format</a><a class="toc-l2" href="#auto-format">Auto Format</a><a class="toc-l2" href="#byte-budgets">Byte Budgets</a><a class="toc-l2" href="#dimension-limits">Dimension Limits</a><a class="toc-l2" href="#resize">Resize</a><a class="toc-l2" href="#metadata">Metadata</a><a class="toc-l2" href="#format-conversion">Format Conversion</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel Budgets</a></nav>
       </div>
     </main>
   </div>

@@ -131,17 +131,8 @@ export type WebpEncodeOptions = BaseEncodeOptions & {
   quality?: number;
 };
 
-/** Discriminated encode options. Format-specific knobs are only valid on their matching format. */
-export type EncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOptions;
-
-/** Encoded output bytes plus final dimensions and metadata status. */
-export type EncodedImage = ImageMetadata & {
-  data: Buffer;
-  format: EncodedImageFormat;
-  mimeType: "image/jpeg" | "image/png" | "image/webp";
-  bytes: number;
-  metadata: EncodedImageMetadataStatus;
-};
+/** Concrete-format encode options. Format-specific knobs are only valid on their matching format. */
+export type SpecificEncodeOptions = JpegEncodeOptions | PngEncodeOptions | WebpEncodeOptions;
 
 /** Search axes for byte-budget encoding. WebP quality search requires external execution. */
 export type EncodeSearchOptions = {
@@ -150,24 +141,8 @@ export type EncodeSearchOptions = {
   compressionLevel?: readonly number[];
 };
 
-/** Encode request with a hard byte budget. If no candidate fits, the smallest candidate is returned with `withinBudget: false`. */
-export type EncodeWithinBytesOptions = EncodeOptions & {
-  maxBytes: number;
-  search?: EncodeSearchOptions;
-};
-
-/** Byte-budget encode result, including the selected search settings. */
-export type EncodedImageWithinBytes = EncodedImage & {
-  withinBudget: boolean;
-  chosen: {
-    maxSide?: number;
-    quality?: number;
-    compressionLevel?: number;
-  };
-};
-
-/** Format preferences for `encodeBest`. WebP quality requires an external backend. */
-export type EncodeBestFormatOptions =
+/** Format preferences for `format: "auto"`. WebP quality requires an external backend. */
+export type EncodeFormatPreference =
   | {
       format: "jpeg";
       quality?: number;
@@ -181,49 +156,84 @@ export type EncodeBestFormatOptions =
       quality?: number;
     };
 
-/** Transparency policy for `encodeBest`. `auto` only decodes known alpha-capable internal formats before deciding. */
-export type EncodeBestTransparencyMode = "auto" | "prefer" | "preserve" | "flatten";
+export type TransparentEncodeFormatPreference = Extract<
+  EncodeFormatPreference,
+  { format: "png" | "webp" }
+>;
 
-/** Options for automatic opaque-vs-transparent output selection. */
-export type EncodeBestOptions = BaseEncodeOptions & {
-  opaque?: EncodeBestFormatOptions;
-  transparent?: EncodeBestFormatOptions;
-  maxBytes?: number;
-  search?: EncodeSearchOptions;
-  transparency?: EncodeBestTransparencyMode;
-};
+/** Transparency policy for `format: "auto"`. `auto` only decodes known alpha-capable internal formats before deciding. */
+export type EncodeTransparencyMode = "auto" | "prefer" | "preserve" | "flatten";
 
-/** `encodeBest` result plus the chosen transparency and search settings. */
-export type EncodedImageBest = EncodedImage & {
-  withinBudget?: boolean;
-  chosen: {
-    transparency: "preserved" | "flattened" | "not-present";
-    maxSide?: number;
-    quality?: number;
-    compressionLevel?: number;
-  };
-};
-
-/** Dimension limits for `encodeToLimits`. At least one limit must be present. */
+/** Dimension limits for `encode`. At least one limit must be present when `limits` is supplied. */
 export type ImageDimensionLimits = {
   maxWidth?: number;
   maxHeight?: number;
   maxPixels?: number;
 };
 
-/** Resize only when dimensions exceed the supplied limits, then delegate to `encodeBest`. */
-export type EncodeToLimitsOptions = BaseEncodeOptions & {
-  limits: ImageDimensionLimits;
-  opaque?: EncodeBestFormatOptions;
-  transparent?: EncodeBestFormatOptions;
+type EncodePolicyOptions = {
   maxBytes?: number;
   search?: EncodeSearchOptions;
-  transparency?: EncodeBestTransparencyMode;
+  limits?: ImageDimensionLimits;
 };
 
-/** `encodeToLimits` result. `resized` says whether dimension limits forced a resize. */
-export type EncodedImageToLimits = EncodedImageBest & {
+/** Automatic output selection. Opaque images use `opaque`; images with transparent pixels use `transparent`. */
+export type AutoEncodeOptions = BaseEncodeOptions &
+  EncodePolicyOptions & {
+    format?: "auto";
+    opaque?: EncodeFormatPreference;
+    transparent?: TransparentEncodeFormatPreference;
+    transparency?: EncodeTransparencyMode;
+  };
+
+/** Public encode options. Use `format: "jpeg" | "png" | "webp"` for exact output, or `format: "auto"` for policy-driven output. */
+export type EncodeOptions = (SpecificEncodeOptions & EncodePolicyOptions) | AutoEncodeOptions;
+
+/** Encoded output bytes plus final dimensions, metadata status, and any policy choices Rastermill made. */
+export type EncodedImage = ImageMetadata & {
+  data: Buffer;
+  format: EncodedImageFormat;
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  bytes: number;
+  metadata: EncodedImageMetadataStatus;
+  withinBudget?: boolean;
   resized: boolean;
+  chosen: {
+    format: EncodedImageFormat;
+    transparency?: "preserved" | "flattened" | "not-present";
+    maxSide?: number;
+    quality?: number;
+    compressionLevel?: number;
+  };
+};
+
+type BudgetEncodeOptions = SpecificEncodeOptions & {
+  maxBytes: number;
+  search?: EncodeSearchOptions;
+};
+
+type BudgetEncodedImage = EncodedImage & {
+  withinBudget: boolean;
+};
+
+type AutoPolicyEncodeOptions = BaseEncodeOptions & {
+  opaque?: EncodeFormatPreference;
+  transparent?: TransparentEncodeFormatPreference;
+  maxBytes?: number;
+  search?: EncodeSearchOptions;
+  transparency?: EncodeTransparencyMode;
+  resize?: ResizeOptions;
+};
+
+type AutoEncodedImage = EncodedImage;
+
+type LimitEncodeOptions = BaseEncodeOptions & {
+  limits: ImageDimensionLimits;
+  opaque?: EncodeFormatPreference;
+  transparent?: TransparentEncodeFormatPreference;
+  maxBytes?: number;
+  search?: EncodeSearchOptions;
+  transparency?: EncodeTransparencyMode;
 };
 
 type NativeEncodeOptions = {
@@ -243,17 +253,18 @@ export type Rastermill = {
   probe(input: ImageInput): Promise<ImageProbe | null>;
   /** Decode enough pixels to distinguish alpha-channel presence from real transparent pixels. Never spawns external tools. */
   transparency(input: ImageInput): Promise<ImageTransparency>;
-  /** Resize/convert/re-encode an image. Metadata is stripped by default; preserve is passthrough-only. */
-  encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage>;
-  /** Search output settings until the result fits `maxBytes`, or return the smallest attempted output. */
-  encodeWithinBytes(
+  /** Resize, convert, auto-select format, fit dimension limits, and/or search a byte budget. */
+  encode(input: ImageInput, options?: EncodeOptions): Promise<EncodedImage>;
+};
+
+type RastermillInternal = Rastermill & {
+  encodeDirect(input: ImageInput, options: SpecificEncodeOptions): Promise<EncodedImage>;
+  encodeWithBudget(
     input: ImageInput,
-    options: EncodeWithinBytesOptions,
-  ): Promise<EncodedImageWithinBytes>;
-  /** Choose an opaque or transparency-preserving output format, optionally under a byte budget. */
-  encodeBest(input: ImageInput, options?: EncodeBestOptions): Promise<EncodedImageBest>;
-  /** Return an image inside max width/height/pixel limits, preserving original bytes when no work is needed and allowed. */
-  encodeToLimits(input: ImageInput, options: EncodeToLimitsOptions): Promise<EncodedImageToLimits>;
+    options: BudgetEncodeOptions,
+  ): Promise<BudgetEncodedImage>;
+  encodeAuto(input: ImageInput, options?: AutoPolicyEncodeOptions): Promise<AutoEncodedImage>;
+  encodeWithLimits(input: ImageInput, options: LimitEncodeOptions): Promise<AutoEncodedImage>;
 };
 
 type ImageOperation = "encode" | "transparency";
@@ -1378,7 +1389,7 @@ function normalizeDimensionLimits(limits: ImageDimensionLimits): ImageDimensionL
   ) {
     throw rastermillError(
       "RASTERMILL_BAD_OPTION",
-      "encodeToLimits requires at least one dimension limit",
+      "encode limits require at least one dimension limit",
     );
   }
   return normalized;
@@ -2312,10 +2323,12 @@ function encodedImage(
     height: metadata.height,
     bytes: output.length,
     metadata: metadataStatus,
+    resized: false,
+    chosen: { format },
   };
 }
 
-function hasExplicitEncodeWork(format: EncodedImageFormat, options: EncodeOptions): boolean {
+function hasExplicitEncodeWork(format: EncodedImageFormat, options: SpecificEncodeOptions): boolean {
   if (format === "jpeg") {
     return options.format === "jpeg" && options.quality !== undefined;
   }
@@ -2330,7 +2343,7 @@ function canReuseInputEncoding(
   format: EncodedImageFormat,
   header: ImageProbe | null,
   resize: NormalizedResizeOptions,
-  options: EncodeOptions,
+  options: SpecificEncodeOptions,
 ): boolean {
   if (normalizeMetadataPolicy(options.metadata) !== "preserve") {
     return false;
@@ -2346,22 +2359,22 @@ function canReuseInputEncoding(
   return target.width === header.width && target.height === header.height;
 }
 
-function encodeBestOptions(options: EncodeBestOptions | undefined): Required<
-  Pick<EncodeBestOptions, "opaque" | "transparent" | "transparency">
+function encodeAutoOptions(options: AutoPolicyEncodeOptions | undefined): Required<
+  Pick<AutoPolicyEncodeOptions, "opaque" | "transparent" | "transparency">
 > &
-  Omit<EncodeBestOptions, "opaque" | "transparent" | "transparency"> {
+  Omit<AutoPolicyEncodeOptions, "opaque" | "transparent" | "transparency"> {
   return {
     ...options,
     opaque: options?.opaque ?? { format: "jpeg" },
     transparent: options?.transparent ?? { format: "png" },
-    transparency: options?.transparency ?? "prefer",
+    transparency: options?.transparency ?? "auto",
   };
 }
 
-function encodeToLimitsOptions(options: EncodeToLimitsOptions): Required<
-  Pick<EncodeToLimitsOptions, "opaque" | "transparent" | "transparency">
+function encodeWithLimitsOptions(options: LimitEncodeOptions): Required<
+  Pick<LimitEncodeOptions, "opaque" | "transparent" | "transparency">
 > &
-  Omit<EncodeToLimitsOptions, "opaque" | "transparent" | "transparency"> {
+  Omit<LimitEncodeOptions, "opaque" | "transparent" | "transparency"> {
   return {
     ...options,
     opaque: options.opaque ?? { format: "jpeg" },
@@ -2370,10 +2383,10 @@ function encodeToLimitsOptions(options: EncodeToLimitsOptions): Required<
   };
 }
 
-function encodeBestFormatOptions(
-  formatOptions: EncodeBestFormatOptions,
-  options: EncodeBestOptions,
-): EncodeOptions {
+function encodeAutoFormatOptions(
+  formatOptions: EncodeFormatPreference,
+  options: AutoPolicyEncodeOptions,
+): SpecificEncodeOptions {
   return {
     ...formatOptions,
     ...(options.resize === undefined ? {} : { resize: options.resize }),
@@ -2383,12 +2396,12 @@ function encodeBestFormatOptions(
   };
 }
 
-function encodeBestWithinBytesOptions(
-  formatOptions: EncodeBestFormatOptions,
-  options: EncodeBestOptions & { maxBytes: number },
-): EncodeWithinBytesOptions {
+function encodeAutoWithinBytesOptions(
+  formatOptions: EncodeFormatPreference,
+  options: AutoPolicyEncodeOptions & { maxBytes: number },
+): BudgetEncodeOptions {
   return {
-    ...encodeBestFormatOptions(formatOptions, options),
+    ...encodeAutoFormatOptions(formatOptions, options),
     maxBytes: options.maxBytes,
     ...(options.search === undefined ? {} : { search: options.search }),
   };
@@ -2450,9 +2463,9 @@ function shouldAutoInspectTransparency(header: ImageProbe | null): boolean {
   return header.format === "png" || header.format === "gif" || header.format === "webp";
 }
 
-async function resolveEncodeBestTransparency(
+async function resolveAutoTransparency(
   rastermill: Rastermill,
-  mode: EncodeBestTransparencyMode,
+  mode: EncodeTransparencyMode,
   buffer: Buffer,
   header: ImageProbe | null,
 ): Promise<ImageTransparency> {
@@ -2466,18 +2479,17 @@ async function resolveEncodeBestTransparency(
 }
 
 function bestChosen(
-  out: EncodedImage | EncodedImageWithinBytes,
-  transparency: EncodedImageBest["chosen"]["transparency"],
-): EncodedImageBest {
+  out: EncodedImage | BudgetEncodedImage,
+  transparency: NonNullable<AutoEncodedImage["chosen"]["transparency"]>,
+): AutoEncodedImage {
   const withinBudget =
     "withinBudget" in out ? { withinBudget: out.withinBudget } : {};
-  const search = "chosen" in out ? out.chosen : {};
   return {
     ...out,
     ...withinBudget,
     chosen: {
+      ...out.chosen,
       transparency,
-      ...search,
     },
   };
 }
@@ -2493,8 +2505,57 @@ function nativeResizeOptions(
   };
 }
 
+function normalizeEncodeOptions(options: EncodeOptions | undefined): EncodeOptions {
+  return { ...(options ?? { format: "auto" }) };
+}
+
+function isAutoEncodeOptions(options: EncodeOptions): options is AutoEncodeOptions {
+  return options.format === undefined || options.format === "auto";
+}
+
+function resizeForLimits(
+  buffer: Buffer,
+  requested: ResizeOptions | undefined,
+  limits: ImageDimensionLimits,
+  autoOrient: boolean,
+  maxInputPixels: number,
+): ResizeOptions | undefined {
+  const metadata = assertHeaderPixelBudget(buffer, maxInputPixels);
+  const orientedMetadata = autoOrientedMetadata(buffer, metadata, autoOrient);
+  const normalizedLimits = normalizeDimensionLimits(limits);
+  const requestedResize = normalizeResizeOptions(requested, orientedMetadata);
+  const requestedDimensions = finalDimensions(orientedMetadata, requestedResize);
+  const limitResize = resizeForDimensionLimits(requestedDimensions, normalizedLimits);
+  if (limitResize === null) {
+    return requested;
+  }
+  const clampedDimensions = finalDimensions(
+    requestedDimensions,
+    normalizeResizeOptions(limitResize, requestedDimensions),
+  );
+  return {
+    fit: requested?.fit ?? "inside",
+    width: clampedDimensions.width,
+    height: clampedDimensions.height,
+    enlarge: requested?.enlarge === true,
+  };
+}
+
+function withResizeStatus(
+  out: EncodedImage,
+  metadata: ImageMetadata,
+  resize: NormalizedResizeOptions,
+): EncodedImage {
+  const target = finalDimensions(metadata, resize);
+  return {
+    ...out,
+    resized: target.width !== metadata.width || target.height !== metadata.height,
+    chosen: { ...out.chosen, format: out.format },
+  };
+}
+
 function createProcessor(options: ResolvedOptions): Rastermill {
-  const rastermill: Rastermill = {
+  const rastermill: RastermillInternal = {
     async probe(input) {
       const buffer = toBuffer(input);
       const header = readImageProbeFromHeader(buffer);
@@ -2548,7 +2609,45 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       }
     },
 
-    async encode(input, encodeOptions) {
+    async encode(input, rawOptions) {
+      const encodeOptions = normalizeEncodeOptions(rawOptions);
+      if (isAutoEncodeOptions(encodeOptions)) {
+        if (encodeOptions.limits) {
+          const { format: _format, ...optionsWithoutFormat } = encodeOptions;
+          return await rastermill.encodeWithLimits(input, {
+            ...optionsWithoutFormat,
+            limits: encodeOptions.limits,
+          });
+        }
+        return await rastermill.encodeAuto(input, encodeOptions);
+      }
+
+      const buffer = toBuffer(input);
+      const resize = encodeOptions.limits
+        ? resizeForLimits(
+            buffer,
+            encodeOptions.resize,
+            encodeOptions.limits,
+            encodeOptions.autoOrient !== false,
+            options.maxInputPixels,
+          )
+        : undefined;
+      const { limits: _limits, maxBytes, search, ...specificOptions } = encodeOptions;
+      const exactOptions = {
+        ...specificOptions,
+        ...(resize === undefined ? {} : { resize }),
+      } satisfies SpecificEncodeOptions;
+      if (maxBytes !== undefined) {
+        return await rastermill.encodeWithBudget(buffer, {
+          ...exactOptions,
+          maxBytes,
+          ...(search === undefined ? {} : { search }),
+        });
+      }
+      return await rastermill.encodeDirect(buffer, exactOptions);
+    },
+
+    async encodeDirect(input, encodeOptions) {
       const buffer = toBuffer(input);
       const header = readImageProbeFromHeader(buffer);
       const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
@@ -2562,7 +2661,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       if (canReuseInputEncoding(buffer, encodeOptions.format, header, resize, encodeOptions)) {
         return encodedImage(buffer, encodeOptions.format, "preserved");
       }
-      return await runWithBackends(
+      const out = await runWithBackends(
         encodeOptions.format,
         options,
         { webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined },
@@ -2681,9 +2780,10 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         }
         throw new Error(`Image backend ${backend} is not available for PNG encoding`);
       });
+      return withResizeStatus(out, orientedMetadata, resize);
     },
 
-    async encodeWithinBytes(input, encodeOptions) {
+    async encodeWithBudget(input, encodeOptions) {
       const buffer = toBuffer(input);
       const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
       const defaultMaxSides =
@@ -2703,7 +2803,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       const compressionLevels = encodeOptions.search?.compressionLevel?.length
         ? [...encodeOptions.search.compressionLevel]
         : [...DEFAULT_PNG_COMPRESSION_LEVELS];
-      let smallest: EncodedImageWithinBytes | null = null;
+      let smallest: BudgetEncodedImage | null = null;
       let firstEncodeError: unknown;
       for (const side of maxSides) {
         for (const quality of encodeOptions.format === "jpeg" || encodeOptions.format === "webp"
@@ -2716,18 +2816,18 @@ function createProcessor(options: ResolvedOptions): Rastermill {
               const nextResize = resizeForSearchMaxSide(encodeOptions.resize, side);
               const out =
                 encodeOptions.format === "jpeg"
-                  ? await rastermill.encode(buffer, {
+                  ? await rastermill.encodeDirect(buffer, {
                       ...encodeOptions,
                       ...(quality === undefined ? {} : { quality }),
                       resize: nextResize,
                     })
                   : encodeOptions.format === "png"
-                    ? await rastermill.encode(buffer, {
+                    ? await rastermill.encodeDirect(buffer, {
                         ...encodeOptions,
                         ...(compressionLevel === undefined ? {} : { compressionLevel }),
                         resize: nextResize,
                       })
-                    : await rastermill.encode(buffer, {
+                    : await rastermill.encodeDirect(buffer, {
                         ...encodeOptions,
                         ...(quality === undefined ? {} : { quality }),
                         resize: nextResize,
@@ -2737,6 +2837,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                 ...out,
                 withinBudget,
                 chosen: {
+                  ...out.chosen,
                   maxSide: side,
                   ...(quality === undefined ? {} : { quality }),
                   ...(compressionLevel === undefined ? {} : { compressionLevel }),
@@ -2763,11 +2864,11 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       throw rastermillError("RASTERMILL_UNDECODABLE", "Failed to encode image within byte budget");
     },
 
-    async encodeBest(input, rawOptions = {}) {
+    async encodeAuto(input, rawOptions = {}) {
       const buffer = toBuffer(input);
-      const encodeOptions = encodeBestOptions(rawOptions);
+      const encodeOptions = encodeAutoOptions(rawOptions);
       const header = readImageProbeFromHeader(buffer);
-      const alpha = await resolveEncodeBestTransparency(
+      const alpha = await resolveAutoTransparency(
         rastermill,
         encodeOptions.transparency,
         buffer,
@@ -2783,17 +2884,17 @@ function createProcessor(options: ResolvedOptions): Rastermill {
           : "not-present";
 
       if (encodeOptions.maxBytes === undefined) {
-        const out = await rastermill.encode(
+        const out = await rastermill.encodeDirect(
           buffer,
-          encodeBestFormatOptions(firstFormat, encodeOptions),
+          encodeAutoFormatOptions(firstFormat, encodeOptions),
         );
         return bestChosen(out, firstTransparency);
       }
 
       const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
-      const first = await rastermill.encodeWithinBytes(
+      const first = await rastermill.encodeWithBudget(
         buffer,
-        encodeBestWithinBytesOptions(firstFormat, {
+        encodeAutoWithinBytesOptions(firstFormat, {
           ...encodeOptions,
           maxBytes,
         }),
@@ -2801,9 +2902,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       if (!useTransparent || first.withinBudget || encodeOptions.transparency === "preserve") {
         return bestChosen(first, firstTransparency);
       }
-      const flattened = await rastermill.encodeWithinBytes(
+      const flattened = await rastermill.encodeWithBudget(
         buffer,
-        encodeBestWithinBytesOptions(encodeOptions.opaque, {
+        encodeAutoWithinBytesOptions(encodeOptions.opaque, {
           ...encodeOptions,
           maxBytes,
         }),
@@ -2811,25 +2912,31 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       return bestChosen(flattened, alpha.hasAlphaChannel ? "flattened" : "not-present");
     },
 
-    async encodeToLimits(input, rawOptions) {
+    async encodeWithLimits(input, rawOptions) {
       const buffer = toBuffer(input);
-      const encodeOptions = encodeToLimitsOptions(rawOptions);
+      const encodeOptions = encodeWithLimitsOptions(rawOptions);
       const header = readImageProbeFromHeader(buffer);
-      const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
-      const orientedMetadata = autoOrientedMetadata(
-        buffer,
-        metadata,
-        encodeOptions.autoOrient !== false,
-      );
       const limits = normalizeDimensionLimits(encodeOptions.limits);
-      const resize = resizeForDimensionLimits(orientedMetadata, limits);
-      if (!resize && encodeOptions.maxBytes === undefined && header) {
+      const requestedResize = encodeOptions.resize;
+      const effectiveResize = resizeForLimits(
+        buffer,
+        requestedResize,
+        limits,
+        encodeOptions.autoOrient !== false,
+        options.maxInputPixels,
+      );
+      if (
+        !effectiveResize &&
+        encodeOptions.maxBytes === undefined &&
+        encodeOptions.transparency !== "flatten" &&
+        header
+      ) {
         if (
           header.format === "jpeg" ||
           header.format === "png" ||
           header.format === "webp"
         ) {
-          const out = await rastermill.encode(buffer, {
+          const out = await rastermill.encodeDirect(buffer, {
             format: header.format,
             ...(encodeOptions.autoOrient === undefined
               ? {}
@@ -2837,21 +2944,24 @@ function createProcessor(options: ResolvedOptions): Rastermill {
             metadata: encodeOptions.metadata ?? "preserve",
             ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
           });
-          return { ...bestChosen(out, header.hasAlpha === true ? "preserved" : "not-present"), resized: false };
+          return {
+            ...bestChosen(out, header.hasAlpha === true ? "preserved" : "not-present"),
+            resized: false,
+          };
         }
       }
-      const out = await rastermill.encodeBest(buffer, {
+      const out = await rastermill.encodeAuto(buffer, {
         opaque: encodeOptions.opaque,
         transparent: encodeOptions.transparent,
         transparency: encodeOptions.transparency,
-        ...(resize === null ? {} : { resize }),
+        ...(effectiveResize === undefined ? {} : { resize: effectiveResize }),
         ...(encodeOptions.maxBytes === undefined ? {} : { maxBytes: encodeOptions.maxBytes }),
         ...(encodeOptions.search === undefined ? {} : { search: encodeOptions.search }),
         ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
         ...(encodeOptions.metadata === undefined ? {} : { metadata: encodeOptions.metadata }),
         ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
       });
-      return { ...out, resized: resize !== null };
+      return out;
     },
   };
   return rastermill;
@@ -2880,30 +2990,6 @@ export async function transparency(input: ImageInput): Promise<ImageTransparency
 }
 
 /** Default-instance `encode`. Metadata is stripped unless `metadata: "preserve"` can return the original bytes unchanged. */
-export async function encode(input: ImageInput, options: EncodeOptions): Promise<EncodedImage> {
+export async function encode(input: ImageInput, options?: EncodeOptions): Promise<EncodedImage> {
   return await getDefaultRastermill().encode(input, options);
-}
-
-/** Default-instance `encodeWithinBytes`. WebP quality search requires an external backend. */
-export async function encodeWithinBytes(
-  input: ImageInput,
-  options: EncodeWithinBytesOptions,
-): Promise<EncodedImageWithinBytes> {
-  return await getDefaultRastermill().encodeWithinBytes(input, options);
-}
-
-/** Default-instance `encodeBest`. Uses transparent pixels, not merely alpha-channel presence, to choose flattening. */
-export async function encodeBest(
-  input: ImageInput,
-  options?: EncodeBestOptions,
-): Promise<EncodedImageBest> {
-  return await getDefaultRastermill().encodeBest(input, options);
-}
-
-/** Default-instance `encodeToLimits`. Returns original encoded bytes when dimensions already fit and preservation is allowed. */
-export async function encodeToLimits(
-  input: ImageInput,
-  options: EncodeToLimitsOptions,
-): Promise<EncodedImageToLimits> {
-  return await getDefaultRastermill().encodeToLimits(input, options);
 }

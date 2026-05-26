@@ -85,7 +85,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   </button>
       </div>
       <label class="search"><span>Search</span><input id="doc-search" type="search" placeholder="encode, webp, pixels"></label>
-      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a><a class="nav-link" href="encode-within-bytes.html">encodeWithinBytes</a></section><section><h2>Runtime</h2><a class="nav-link active" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
+      <nav><section><h2>Start</h2><a class="nav-link" href="index.html">Overview</a><a class="nav-link" href="configuration.html">Configuration</a></section><section><h2>API</h2><a class="nav-link" href="probe.html">probe</a><a class="nav-link" href="transparency.html">transparency</a><a class="nav-link" href="encode.html">encode</a></section><section><h2>Runtime</h2><a class="nav-link active" href="backends.html">Backends</a><a class="nav-link" href="error-handling.html">Error handling</a></section></nav>
     </aside>
     <main>
       <header class="hero">
@@ -132,7 +132,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <pre><code class="language-ts">createRastermill({ execution: <span class="hl-s">&quot;auto&quot;</span> });     <span class="hl-c">// Photon first, native tools as needed</span>
 createRastermill({ execution: <span class="hl-s">&quot;internal&quot;</span> }); <span class="hl-c">// no child processes</span>
 createRastermill({ execution: <span class="hl-s">&quot;external&quot;</span> }); <span class="hl-c">// native tools only</span></code></pre>
-<p><code>execution: &quot;internal&quot;</code> currently supports PNG, JPEG, GIF, and WebP input through Photon. It cannot decode HEIC/AVIF, so those operations fail with <code>RastermillUnavailableError</code> instead of spawning <code>sips</code>, ImageMagick, or ffmpeg.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="encode-within-bytes.html"><small>Previous</small><span>encodeWithinBytes</span></a><a class="page-nav-next" href="error-handling.html"><small>Next</small><span>Error handling</span></a></nav></article>
+<p><code>execution: &quot;internal&quot;</code> currently supports PNG, JPEG, GIF, and WebP input through Photon. It cannot decode HEIC/AVIF, so those operations fail with <code>RastermillUnavailableError</code> instead of spawning <code>sips</code>, ImageMagick, or ffmpeg.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="encode.html"><small>Previous</small><span>encode</span></a><a class="page-nav-next" href="error-handling.html"><small>Next</small><span>Error handling</span></a></nav></article>
         <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#available-backends">Available backends</a><a class="toc-l2" href="#automatic-order">Automatic order</a><a class="toc-l2" href="#metadata">Metadata</a><a class="toc-l2" href="#how-fallback-works">How fallback works</a><a class="toc-l2" href="#execution-modes">Execution modes</a></nav>
       </div>
     </main>

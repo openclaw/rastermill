@@ -4,10 +4,10 @@
 
 - Add `transparency(input)` for alpha-channel and transparent-pixel inspection across common raster formats.
 - Add `execution: "auto" | "internal" | "external"` so callers can keep work in-process, force native tools, or use automatic fallback.
-- Add `encodeBest(input, options?)` to choose opaque or transparency-preserving output, with optional byte-budget search.
+- Collapse writing into `encode(input, options?)` for exact formats, auto format choice, dimension limits, and byte-budget search.
 - Add metadata policy controls: encoded outputs strip metadata by default, while `metadata: "preserve"` can reuse original bytes when no transform is needed.
 - Keep Photon loading lazy, including default-instance and external-execution paths.
-- Expand docs for transparency, execution modes, metadata behavior, and `encodeBest`.
+- Expand docs for transparency, execution modes, metadata behavior, and unified `encode`.
 
 ## 0.2.0 - 2026-05-26
 

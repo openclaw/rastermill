@@ -26,7 +26,7 @@ const jpeg = await rastermill.encode(imageBuffer, {
   resize: { maxSide: 1600 },
   quality: 85,
 });
-// => { data, format: "jpeg", mimeType: "image/jpeg", width, height, bytes, metadata: "stripped" }
+// => { data, format: "jpeg", mimeType: "image/jpeg", width, height, bytes, metadata: "stripped", resized, chosen }
 ```
 
 ## API
@@ -35,27 +35,17 @@ const jpeg = await rastermill.encode(imageBuffer, {
 const rastermill = createRastermill(options);
 ```
 
-The API is six methods:
+The API is three methods:
 
 - `probe(input)` — read `format`, `width`, `height`, `bytes`, `hasAlpha`, and `orientation` from the header, without a full decode.
 - `transparency(input)` — decode common raster formats and report `hasAlphaChannel` separately from `hasTransparentPixels`.
-- `encode(input, options)` — resize and re-encode to a `format` (`"jpeg"`, `"png"`, or `"webp"`); returns the bytes, final dimensions, and metadata status.
-- `encodeWithinBytes(input, options)` — encode under a byte budget, searching across dimensions, JPEG/WebP quality, and PNG compression; the result says whether the budget was met.
-- `encodeBest(input, options?)` — choose an opaque or transparency-preserving output, optionally under a byte budget.
-- `encodeToLimits(input, options)` — return an image inside max width/height/pixel limits, using `encodeBest` only when dimensions need work.
+- `encode(input, options?)` — resize, re-encode to an exact format, auto-select opaque vs transparent output, fit dimension limits, and/or search a byte budget.
 
 The same methods are also exported as standalone functions backed by a lazy
 default-configured instance:
 
 ```ts
-import {
-  probe,
-  transparency,
-  encode,
-  encodeWithinBytes,
-  encodeBest,
-  encodeToLimits,
-} from "rastermill";
+import { probe, transparency, encode } from "rastermill";
 ```
 
 A straight format conversion (e.g. HEIC/AVIF → JPEG) is just `encode(input, { format: "jpeg" })` with no `resize`. JPEG EXIF orientation is baked in by default; HEIC orientation handling depends on the native backend. Pass `autoOrient: false` to skip explicit orientation work.

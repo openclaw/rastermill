@@ -1068,9 +1068,6 @@ async function loadPhoton(): Promise<PhotonModule> {
     ) {
       throw new Error("Photon did not expose the required image processor API");
     }
-    if (typeof mod.PhotonImage.prototype.get_bytes_webp !== "function") {
-      throw new Error("Photon did not expose WebP encoding");
-    }
     return mod;
   });
   return await photonPromise;
@@ -2710,6 +2707,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
               );
             }
             if (encodeOptions.format === "webp") {
+              if (typeof resized.get_bytes_webp !== "function") {
+                throw new Error("Photon did not expose WebP encoding");
+              }
               return encodedImage(Buffer.from(resized.get_bytes_webp()), "webp", "stripped");
             }
             if (encodeOptions.format === "png") {

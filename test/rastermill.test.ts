@@ -53,6 +53,22 @@ function losslessWebpHeader(width: number, height: number, hasAlpha: boolean): B
   return buffer;
 }
 
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  return Buffer.concat([length, typeBuffer, data, crc]);
+}
+
+function pngWithTextChunk(source: Buffer): Buffer {
+  return Buffer.concat([
+    source.subarray(0, -12),
+    pngChunk("tEXt", Buffer.from("Comment\0metadata", "latin1")),
+    source.subarray(-12),
+  ]);
+}
+
 function jpegWithAppMetadata(width: number, height: number): Buffer {
   const app1 = Buffer.concat([
     Buffer.from([0xff, 0xe1, 0x00, 0x08]),
@@ -143,13 +159,6 @@ function grayscaleAlphaPng(width: number, height: number, alpha = 128): Buffer {
       raw[offset + 1] = alpha;
     }
   }
-  const pngChunk = (type: string, data: Buffer) => {
-    const typeBuffer = Buffer.from(type, "ascii");
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length, 0);
-    const crc = Buffer.alloc(4);
-    return Buffer.concat([length, typeBuffer, data, crc]);
-  };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
@@ -482,7 +491,7 @@ describe("Rastermill", () => {
     });
     const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
       await import("../src/index.js");
-    const source = encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4);
+    const source = pngWithTextChunk(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4));
 
     const result = await createFreshRastermill().encode(source, { format: "png" });
 

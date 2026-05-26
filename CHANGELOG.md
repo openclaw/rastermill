@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 - Unreleased
+## 0.3.0 - 2026-05-26
 
 - Add `transparency(input)` for alpha-channel and transparent-pixel inspection across common raster formats.
 - Add `execution: "auto" | "internal" | "external"` so callers can keep work in-process, force native tools, or use automatic fallback.

@@ -30,4 +30,5 @@ jobs:
       - run: pnpm check
       - run: pnpm test
       - run: pnpm build
-      - run: pnpm pack --pack-destination /tmp/prism-pack
+      - run: pnpm docs:check
+      - run: pnpm pack --pack-destination /tmp/rastermill-pack

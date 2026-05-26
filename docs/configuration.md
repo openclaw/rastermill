@@ -1,7 +1,7 @@
 # Configuration
 
 Create a configured processor with `createRastermill`, or use the exported module
-functions that share a single default-configured instance.
+functions that lazily create a default-configured instance on first use.
 
 ```ts
 import { createRastermill } from "rastermill";

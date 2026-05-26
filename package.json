@@ -8,7 +8,7 @@
     "type": "git",
     "url": "git+https://github.com/openclaw/rastermill.git"
   },
-  "homepage": "https://github.com/openclaw/rastermill#readme",
+  "homepage": "https://rastermill.com/",
   "bugs": {
     "url": "https://github.com/openclaw/rastermill/issues"
   },
@@ -45,6 +45,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
+    "docs:build": "node scripts/build-docs-site.mjs",
+    "docs:check": "pnpm docs:build && git diff --exit-code -- docs/*.html docs/favicon.svg docs/.nojekyll docs/llms.txt && test -z \"$(git ls-files --others --exclude-standard -- docs/*.html docs/favicon.svg docs/.nojekyll docs/llms.txt)\"",
     "prepare": "pnpm build",
     "prepack": "pnpm build",
     "prepublishOnly": "pnpm check && pnpm test && pnpm build",

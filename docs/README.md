@@ -1,4 +1,4 @@
-# Rastermill documentation
+# Rastermill
 
 Fast, portable image processing for Node agents. Rastermill runs in-process with
 [Photon](https://github.com/silvia-odwyer/photon) for the common formats and
@@ -36,7 +36,8 @@ Every method accepts a `Buffer`, `Uint8Array`, or `ArrayBuffer` as input.
 
 Create a configured instance with `createRastermill(options)`, or use the
 default-configured module functions: `probe`, `encode`, and `encodeWithinBytes`
-are exported directly and share a single default `Rastermill` instance.
+are exported directly and lazily create a default `Rastermill` instance on first
+use.
 
 ## Safety model
 

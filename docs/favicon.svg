@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Rastermill">
+<rect width="64" height="64" rx="12" fill="#101820"/>
+<g transform="rotate(-8 32 32)">
+<rect x="13" y="15" width="10" height="10" rx="2" fill="#31c0bc"/>
+<rect x="27" y="15" width="10" height="10" rx="2" fill="#d6b05f"/>
+<rect x="41" y="15" width="10" height="10" rx="2" fill="#c5534d"/>
+<rect x="13" y="39" width="10" height="10" rx="2" fill="#3b6ea8"/>
+<rect x="27" y="39" width="10" height="10" rx="2" fill="#3e8f58"/>
+<rect x="41" y="39" width="10" height="10" rx="2" fill="#0d7f86"/>
+</g></svg>

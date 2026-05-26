@@ -17,7 +17,15 @@ class RastermillError extends Error {
 ```
 
 Use `isRastermillError(error)` when you want to branch on these codes without
-matching error-message text.
+matching error-message text:
+
+```ts
+import { isRastermillError } from "rastermill";
+
+if (isRastermillError(error) && error.code === "RASTERMILL_INPUT_TOO_LARGE") {
+  return null;
+}
+```
 
 ## `RastermillUnavailableError`
 
@@ -59,9 +67,9 @@ try {
 ## Unavailable vs. real errors
 
 During automatic fallback Rastermill inspects each backend's error. If it looks like
-the backend is merely *unavailable* — for example `ENOENT`, "command not
-found", "cannot decode", "decode delegate", "unsupported image format", or a
-missing Photon package — Rastermill records it and tries the next backend.
+the backend is merely *unavailable* — for example `ENOENT`, a missing executable,
+a missing Photon package, an unsupported format, or a missing codec delegate —
+Rastermill records it and tries the next backend.
 
 Any other error (a present backend rejecting a genuinely malformed image, a
 timeout, an output-buffer overflow) is thrown immediately and is **not** wrapped

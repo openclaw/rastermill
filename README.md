@@ -7,6 +7,8 @@ Photon for fast in-process image work and can fall back to native tools such as
 `sips`, ImageMagick, GraphicsMagick, or ffmpeg for formats that need external
 codec support.
 
+Docs: <https://rastermill.com/>
+
 ```ts
 import { createRastermill } from "rastermill";
 
@@ -37,7 +39,8 @@ The API is three methods:
 - `encode(input, options)` — resize and re-encode to a `format` (`"jpeg"`, `"png"`, or `"webp"`); returns the bytes plus the final dimensions.
 - `encodeWithinBytes(input, options)` — encode under a byte budget, searching across dimensions, JPEG quality, and PNG compression; the result says whether the budget was met.
 
-The same three are also exported as standalone functions backed by a default-configured instance:
+The same three are also exported as standalone functions backed by a lazy
+default-configured instance:
 
 ```ts
 import { probe, encode, encodeWithinBytes } from "rastermill";

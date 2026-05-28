@@ -1,6 +1,6 @@
-![Rastermill banner](docs/assets/readme-banner.jpg)
-
 # Rastermill
+
+![Rastermill banner](docs/assets/readme-banner.jpg)
 
 Fast, portable image processing for Node agents.
 

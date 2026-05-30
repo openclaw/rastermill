@@ -1645,6 +1645,35 @@ function normalizeMetadataPolicy(policy) {
 function mimeTypeForEncodedFormat(format) {
     return format === "jpeg" ? "image/jpeg" : format === "png" ? "image/png" : "image/webp";
 }
+function base64EncodedLength(byteLength) {
+    return Math.ceil(byteLength / 3) * 4;
+}
+function hasByteBudget(options) {
+    return options.maxBytes !== undefined || options.maxBase64Bytes !== undefined;
+}
+function normalizeByteBudget(options) {
+    const rawBudgets = [];
+    const budget = {};
+    if (options.maxBytes !== undefined) {
+        budget.maxBytes = normalizePositiveInteger(options.maxBytes, "maxBytes");
+        rawBudgets.push(budget.maxBytes);
+    }
+    if (options.maxBase64Bytes !== undefined) {
+        budget.maxBase64Bytes = normalizePositiveInteger(options.maxBase64Bytes, "maxBase64Bytes");
+        rawBudgets.push(Math.floor(budget.maxBase64Bytes / 4) * 3);
+    }
+    if (rawBudgets.length === 0) {
+        throw rastermillError("RASTERMILL_BAD_OPTION", "At least one byte budget is required for budgeted encoding");
+    }
+    return {
+        ...budget,
+        effectiveMaxBytes: Math.min(...rawBudgets),
+    };
+}
+function isWithinByteBudget(out, budget) {
+    return (out.bytes <= budget.effectiveMaxBytes &&
+        (budget.maxBase64Bytes === undefined || out.base64Bytes <= budget.maxBase64Bytes));
+}
 function encodedImage(data, format, metadataStatus) {
     const output = metadataStatus === "stripped" && format === "jpeg" ? stripJpegMetadata(data) : data;
     const metadata = readRequiredEncodedMetadata(output, format);
@@ -1655,6 +1684,7 @@ function encodedImage(data, format, metadataStatus) {
         width: metadata.width,
         height: metadata.height,
         bytes: output.length,
+        base64Bytes: base64EncodedLength(output.length),
         metadata: metadataStatus,
         resized: false,
         chosen: { format },
@@ -1711,7 +1741,8 @@ function encodeAutoFormatOptions(formatOptions, options) {
 function encodeAutoWithinBytesOptions(formatOptions, options) {
     return {
         ...encodeAutoFormatOptions(formatOptions, options),
-        maxBytes: options.maxBytes,
+        ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+        ...(options.maxBase64Bytes === undefined ? {} : { maxBase64Bytes: options.maxBase64Bytes }),
         ...(options.search === undefined ? {} : { search: options.search }),
     };
 }
@@ -1898,15 +1929,16 @@ function createProcessor(options) {
             const resize = encodeOptions.limits
                 ? resizeForLimits(buffer, encodeOptions.resize, encodeOptions.limits, encodeOptions.autoOrient !== false, options.maxInputPixels)
                 : undefined;
-            const { limits: _limits, maxBytes, search, ...specificOptions } = encodeOptions;
+            const { limits: _limits, maxBytes, maxBase64Bytes, search, ...specificOptions } = encodeOptions;
             const exactOptions = {
                 ...specificOptions,
                 ...(resize === undefined ? {} : { resize }),
             };
-            if (maxBytes !== undefined) {
+            if (maxBytes !== undefined || maxBase64Bytes !== undefined) {
                 return await rastermill.encodeWithBudget(buffer, {
                     ...exactOptions,
-                    maxBytes,
+                    ...(maxBytes === undefined ? {} : { maxBytes }),
+                    ...(maxBase64Bytes === undefined ? {} : { maxBase64Bytes }),
                     ...(search === undefined ? {} : { search }),
                 });
             }
@@ -2007,7 +2039,7 @@ function createProcessor(options) {
         },
         async encodeWithBudget(input, encodeOptions) {
             const buffer = toBuffer(input);
-            const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
+            const budget = normalizeByteBudget(encodeOptions);
             const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
             const orientedMetadata = autoOrientedMetadata(buffer, metadata, encodeOptions.autoOrient !== false);
             const maxSides = encodeOptions.search?.maxSide?.length
@@ -2047,7 +2079,7 @@ function createProcessor(options) {
                                         ...(quality === undefined ? {} : { quality }),
                                         resize: nextResize,
                                     });
-                            const withinBudget = out.bytes <= maxBytes;
+                            const withinBudget = isWithinByteBudget(out, budget);
                             const candidate = {
                                 ...out,
                                 withinBudget,
@@ -2091,21 +2123,18 @@ function createProcessor(options) {
                 : alpha.hasAlphaChannel
                     ? "flattened"
                     : "not-present";
-            if (encodeOptions.maxBytes === undefined) {
+            if (!hasByteBudget(encodeOptions)) {
                 const out = await rastermill.encodeDirect(buffer, encodeAutoFormatOptions(firstFormat, encodeOptions));
                 return bestChosen(out, firstTransparency);
             }
-            const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
             const first = await rastermill.encodeWithBudget(buffer, encodeAutoWithinBytesOptions(firstFormat, {
                 ...encodeOptions,
-                maxBytes,
             }));
             if (!useTransparent || first.withinBudget || encodeOptions.transparency === "preserve") {
                 return bestChosen(first, firstTransparency);
             }
             const flattened = await rastermill.encodeWithBudget(buffer, encodeAutoWithinBytesOptions(encodeOptions.opaque, {
                 ...encodeOptions,
-                maxBytes,
             }));
             return bestChosen(flattened, alpha.hasAlphaChannel ? "flattened" : "not-present");
         },
@@ -2117,7 +2146,7 @@ function createProcessor(options) {
             const requestedResize = encodeOptions.resize;
             const effectiveResize = resizeForLimits(buffer, requestedResize, limits, encodeOptions.autoOrient !== false, options.maxInputPixels);
             if (!effectiveResize &&
-                encodeOptions.maxBytes === undefined &&
+                !hasByteBudget(encodeOptions) &&
                 encodeOptions.transparency !== "flatten" &&
                 header) {
                 if (header.format === "jpeg" || header.format === "png" || header.format === "webp") {
@@ -2141,6 +2170,9 @@ function createProcessor(options) {
                 transparency: encodeOptions.transparency,
                 ...(effectiveResize === undefined ? {} : { resize: effectiveResize }),
                 ...(encodeOptions.maxBytes === undefined ? {} : { maxBytes: encodeOptions.maxBytes }),
+                ...(encodeOptions.maxBase64Bytes === undefined
+                    ? {}
+                    : { maxBase64Bytes: encodeOptions.maxBase64Bytes }),
                 ...(encodeOptions.search === undefined ? {} : { search: encodeOptions.search }),
                 ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
                 ...(encodeOptions.metadata === undefined ? {} : { metadata: encodeOptions.metadata }),

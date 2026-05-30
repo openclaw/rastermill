@@ -11,7 +11,7 @@ const jpeg = await rastermill.encode(input, {
   resize: { maxSide: 1600 },
   quality: 85,
 });
-// => { data, format: "jpeg", mimeType: "image/jpeg", width, height, bytes, metadata, resized, chosen }
+// => { data, format: "jpeg", mimeType: "image/jpeg", width, height, bytes, base64Bytes, metadata, resized, chosen }
 ```
 
 Calling `encode(input)` or `encode(input, { format: "auto" })` uses the default
@@ -39,6 +39,7 @@ type EncodeOptions =
       quality?: number; // 1-100, default 85
       limits?: ImageDimensionLimits;
       maxBytes?: number;
+      maxBase64Bytes?: number;
       search?: EncodeSearchOptions;
       autoOrient?: boolean; // default true
       metadata?: "strip" | "preserve"; // default "strip"
@@ -50,6 +51,7 @@ type EncodeOptions =
       compressionLevel?: number; // 0-9, default 6
       limits?: ImageDimensionLimits;
       maxBytes?: number;
+      maxBase64Bytes?: number;
       search?: EncodeSearchOptions;
       autoOrient?: boolean;
       metadata?: "strip" | "preserve";
@@ -61,6 +63,7 @@ type EncodeOptions =
       quality?: number; // 1-100, requires external execution
       limits?: ImageDimensionLimits;
       maxBytes?: number;
+      maxBase64Bytes?: number;
       search?: EncodeSearchOptions;
       autoOrient?: boolean;
       metadata?: "strip" | "preserve";
@@ -106,6 +109,7 @@ type AutoEncodeOptions = {
   resize?: ResizeOptions;
   limits?: ImageDimensionLimits;
   maxBytes?: number;
+  maxBase64Bytes?: number;
   search?: EncodeSearchOptions;
   autoOrient?: boolean;
   metadata?: "strip" | "preserve";
@@ -119,7 +123,7 @@ type AutoEncodeOptions = {
   alpha-capable formats (`png`, `gif`, `webp`), otherwise uses the header hint
   and chooses the opaque output.
 - **`prefer`** preserves alpha first, then flattens to the opaque
-  output if a transparent result cannot fit `maxBytes`.
+  output if a transparent result cannot fit the active byte budget.
 - **`preserve`** never flattens alpha. If no transparent candidate fits, the
   result is the smallest transparent candidate with `withinBudget: false`.
 - **`flatten`** always uses the opaque output.
@@ -133,8 +137,10 @@ type AutoEncodeOptions = {
 
 ## Byte Budgets
 
-Add `maxBytes` to make `encode` search output settings until the result fits, or
-return the smallest candidate with `withinBudget: false`:
+Add `maxBytes` to budget the raw output bytes, or `maxBase64Bytes` to budget the
+base64 payload length that messaging/model APIs often enforce. Rastermill
+searches output settings until the result fits, or returns the smallest
+candidate with `withinBudget: false`:
 
 ```ts
 const out = await rastermill.encode(input, {
@@ -147,6 +153,16 @@ const out = await rastermill.encode(input, {
 });
 ```
 
+```ts
+const modelPayload = await rastermill.encode(input, {
+  format: "auto",
+  maxBase64Bytes: 4_500_000,
+  limits: { maxWidth: 2000, maxHeight: 2000 },
+  opaque: { format: "jpeg", quality: 80 },
+  transparency: "flatten",
+});
+```
+
 Search axes depend on the output format:
 
 - JPEG/WebP search `quality` and `maxSide`.
@@ -154,8 +170,8 @@ Search axes depend on the output format:
 - WebP quality search requires an external backend; internal Photon WebP can
   only participate in resize-only searches.
 
-The result always includes `bytes`, `withinBudget`, and `chosen` so callers can
-see what Rastermill selected.
+The result always includes `bytes`, `base64Bytes`, `withinBudget`, and `chosen`
+so callers can see what Rastermill selected.
 
 ## Dimension Limits
 

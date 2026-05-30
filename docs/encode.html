@@ -106,7 +106,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   resize: { maxSide: <span class="hl-n">1600</span> },
   quality: <span class="hl-n">85</span>,
 });
-<span class="hl-c">// =&gt; { data, format: &quot;jpeg&quot;, mimeType: &quot;image/jpeg&quot;, width, height, bytes, metadata, resized, chosen }</span></code></pre>
+<span class="hl-c">// =&gt; { data, format: &quot;jpeg&quot;, mimeType: &quot;image/jpeg&quot;, width, height, bytes, base64Bytes, metadata, resized, chosen }</span></code></pre>
 <p>Calling <code>encode(input)</code> or <code>encode(input, { format: &quot;auto&quot; })</code> uses the default automatic policy: opaque output becomes JPEG, transparent output becomes PNG, and transparency is inspected only when the input format makes that useful.</p>
 <h2 id="exact-format"><a class="anchor" href="#exact-format" aria-label="Anchor link">#</a>Exact Format</h2>
 <p>Use <code>format: &quot;jpeg&quot; | &quot;png&quot; | &quot;webp&quot;</code> when the caller wants a specific output format:</p>
@@ -122,6 +122,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       quality?: number; <span class="hl-c">// 1-100, default 85</span>
       limits?: ImageDimensionLimits;
       maxBytes?: number;
+      maxBase64Bytes?: number;
       search?: EncodeSearchOptions;
       autoOrient?: boolean; <span class="hl-c">// default true</span>
       metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>; <span class="hl-c">// default &quot;strip&quot;</span>
@@ -133,6 +134,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       compressionLevel?: number; <span class="hl-c">// 0-9, default 6</span>
       limits?: ImageDimensionLimits;
       maxBytes?: number;
+      maxBase64Bytes?: number;
       search?: EncodeSearchOptions;
       autoOrient?: boolean;
       metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>;
@@ -144,6 +146,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
       quality?: number; <span class="hl-c">// 1-100, requires external execution</span>
       limits?: ImageDimensionLimits;
       maxBytes?: number;
+      maxBase64Bytes?: number;
       search?: EncodeSearchOptions;
       autoOrient?: boolean;
       metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>;
@@ -176,6 +179,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
   resize?: ResizeOptions;
   limits?: ImageDimensionLimits;
   maxBytes?: number;
+  maxBase64Bytes?: number;
   search?: EncodeSearchOptions;
   autoOrient?: boolean;
   metadata?: <span class="hl-s">&quot;strip&quot;</span> | <span class="hl-s">&quot;preserve&quot;</span>;
@@ -184,7 +188,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <p><code>transparency</code> controls alpha handling:</p>
 <ul>
 <li><strong><code>auto</code></strong> (default) inspects transparent pixels only for known in-process alpha-capable formats (<code>png</code>, <code>gif</code>, <code>webp</code>), otherwise uses the header hint and chooses the opaque output.</li>
-<li><strong><code>prefer</code></strong> preserves alpha first, then flattens to the opaque output if a transparent result cannot fit <code>maxBytes</code>.</li>
+<li><strong><code>prefer</code></strong> preserves alpha first, then flattens to the opaque output if a transparent result cannot fit the active byte budget.</li>
 <li><strong><code>preserve</code></strong> never flattens alpha. If no transparent candidate fits, the result is the smallest transparent candidate with <code>withinBudget: false</code>.</li>
 <li><strong><code>flatten</code></strong> always uses the opaque output.</li>
 </ul>
@@ -195,7 +199,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <li><strong><code>not-present</code></strong> means no alpha was detected from the inspected/header facts.</li>
 </ul>
 <h2 id="byte-budgets"><a class="anchor" href="#byte-budgets" aria-label="Anchor link">#</a>Byte Budgets</h2>
-<p>Add <code>maxBytes</code> to make <code>encode</code> search output settings until the result fits, or return the smallest candidate with <code>withinBudget: false</code>:</p>
+<p>Add <code>maxBytes</code> to budget the raw output bytes, or <code>maxBase64Bytes</code> to budget the base64 payload length that messaging/model APIs often enforce. Rastermill searches output settings until the result fits, or returns the smallest candidate with <code>withinBudget: false</code>:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encode(input, {
   format: <span class="hl-s">&quot;jpeg&quot;</span>,
   maxBytes: 500_000,
@@ -204,13 +208,20 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
     quality: [<span class="hl-n">85</span>, <span class="hl-n">75</span>, <span class="hl-n">65</span>],
   },
 });</code></pre>
+<pre><code class="language-ts"><span class="hl-k">const</span> modelPayload = <span class="hl-k">await</span> rastermill.encode(input, {
+  format: <span class="hl-s">&quot;auto&quot;</span>,
+  maxBase64Bytes: 4_500_000,
+  limits: { maxWidth: <span class="hl-n">2000</span>, maxHeight: <span class="hl-n">2000</span> },
+  opaque: { format: <span class="hl-s">&quot;jpeg&quot;</span>, quality: <span class="hl-n">80</span> },
+  transparency: <span class="hl-s">&quot;flatten&quot;</span>,
+});</code></pre>
 <p>Search axes depend on the output format:</p>
 <ul>
 <li>JPEG/WebP search <code>quality</code> and <code>maxSide</code>.</li>
 <li>PNG searches <code>compressionLevel</code> and <code>maxSide</code>.</li>
 <li>WebP quality search requires an external backend; internal Photon WebP can only participate in resize-only searches.</li>
 </ul>
-<p>The result always includes <code>bytes</code>, <code>withinBudget</code>, and <code>chosen</code> so callers can see what Rastermill selected.</p>
+<p>The result always includes <code>bytes</code>, <code>base64Bytes</code>, <code>withinBudget</code>, and <code>chosen</code> so callers can see what Rastermill selected.</p>
 <h2 id="dimension-limits"><a class="anchor" href="#dimension-limits" aria-label="Anchor link">#</a>Dimension Limits</h2>
 <p>Add <code>limits</code> when dimensions are the primary constraint:</p>
 <pre><code class="language-ts"><span class="hl-k">const</span> out = <span class="hl-k">await</span> rastermill.encode(input, {

@@ -114,6 +114,7 @@ export type ImageDimensionLimits = {
 };
 type EncodePolicyOptions = {
     maxBytes?: number;
+    maxBase64Bytes?: number;
     search?: EncodeSearchOptions;
     limits?: ImageDimensionLimits;
 };
@@ -132,6 +133,7 @@ export type EncodedImage = ImageMetadata & {
     format: EncodedImageFormat;
     mimeType: "image/jpeg" | "image/png" | "image/webp";
     bytes: number;
+    base64Bytes: number;
     metadata: EncodedImageMetadataStatus;
     withinBudget?: boolean;
     resized: boolean;

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.3.1 - 2026-05-30
+
+- Add `maxBase64Bytes` encode budgets and `base64Bytes` output metadata for model and messaging payload limits.
 - Expand coverage for malformed image headers, EXIF orientation handling, native fallback selection, and external encoder error paths.
 - Require Node 22 or newer and add a tarball install/import smoke gate to CI.
 

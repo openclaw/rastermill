@@ -173,6 +173,7 @@ export type ImageDimensionLimits = {
 
 type EncodePolicyOptions = {
   maxBytes?: number;
+  maxBase64Bytes?: number;
   search?: EncodeSearchOptions;
   limits?: ImageDimensionLimits;
 };
@@ -195,6 +196,7 @@ export type EncodedImage = ImageMetadata & {
   format: EncodedImageFormat;
   mimeType: "image/jpeg" | "image/png" | "image/webp";
   bytes: number;
+  base64Bytes: number;
   metadata: EncodedImageMetadataStatus;
   withinBudget?: boolean;
   resized: boolean;
@@ -208,7 +210,8 @@ export type EncodedImage = ImageMetadata & {
 };
 
 type BudgetEncodeOptions = SpecificEncodeOptions & {
-  maxBytes: number;
+  maxBytes?: number;
+  maxBase64Bytes?: number;
   search?: EncodeSearchOptions;
 };
 
@@ -220,6 +223,7 @@ type AutoPolicyEncodeOptions = BaseEncodeOptions & {
   opaque?: EncodeFormatPreference;
   transparent?: TransparentEncodeFormatPreference;
   maxBytes?: number;
+  maxBase64Bytes?: number;
   search?: EncodeSearchOptions;
   transparency?: EncodeTransparencyMode;
   resize?: ResizeOptions;
@@ -232,8 +236,18 @@ type LimitEncodeOptions = BaseEncodeOptions & {
   opaque?: EncodeFormatPreference;
   transparent?: TransparentEncodeFormatPreference;
   maxBytes?: number;
+  maxBase64Bytes?: number;
   search?: EncodeSearchOptions;
   transparency?: EncodeTransparencyMode;
+};
+
+type ByteBudgetOptions = {
+  maxBytes?: number;
+  maxBase64Bytes?: number;
+};
+
+type NormalizedByteBudget = ByteBudgetOptions & {
+  effectiveMaxBytes: number;
 };
 
 type NativeEncodeOptions = {
@@ -2284,6 +2298,44 @@ function mimeTypeForEncodedFormat(format: EncodedImageFormat): EncodedImage["mim
   return format === "jpeg" ? "image/jpeg" : format === "png" ? "image/png" : "image/webp";
 }
 
+function base64EncodedLength(byteLength: number): number {
+  return Math.ceil(byteLength / 3) * 4;
+}
+
+function hasByteBudget(options: ByteBudgetOptions): boolean {
+  return options.maxBytes !== undefined || options.maxBase64Bytes !== undefined;
+}
+
+function normalizeByteBudget(options: ByteBudgetOptions): NormalizedByteBudget {
+  const rawBudgets: number[] = [];
+  const budget: ByteBudgetOptions = {};
+  if (options.maxBytes !== undefined) {
+    budget.maxBytes = normalizePositiveInteger(options.maxBytes, "maxBytes");
+    rawBudgets.push(budget.maxBytes);
+  }
+  if (options.maxBase64Bytes !== undefined) {
+    budget.maxBase64Bytes = normalizePositiveInteger(options.maxBase64Bytes, "maxBase64Bytes");
+    rawBudgets.push(Math.floor(budget.maxBase64Bytes / 4) * 3);
+  }
+  if (rawBudgets.length === 0) {
+    throw rastermillError(
+      "RASTERMILL_BAD_OPTION",
+      "At least one byte budget is required for budgeted encoding",
+    );
+  }
+  return {
+    ...budget,
+    effectiveMaxBytes: Math.min(...rawBudgets),
+  };
+}
+
+function isWithinByteBudget(out: EncodedImage, budget: NormalizedByteBudget): boolean {
+  return (
+    out.bytes <= budget.effectiveMaxBytes &&
+    (budget.maxBase64Bytes === undefined || out.base64Bytes <= budget.maxBase64Bytes)
+  );
+}
+
 function encodedImage(
   data: Buffer,
   format: EncodedImageFormat,
@@ -2299,6 +2351,7 @@ function encodedImage(
     width: metadata.width,
     height: metadata.height,
     bytes: output.length,
+    base64Bytes: base64EncodedLength(output.length),
     metadata: metadataStatus,
     resized: false,
     chosen: { format },
@@ -2378,11 +2431,12 @@ function encodeAutoFormatOptions(
 
 function encodeAutoWithinBytesOptions(
   formatOptions: EncodeFormatPreference,
-  options: AutoPolicyEncodeOptions & { maxBytes: number },
+  options: AutoPolicyEncodeOptions & ByteBudgetOptions,
 ): BudgetEncodeOptions {
   return {
     ...encodeAutoFormatOptions(formatOptions, options),
-    maxBytes: options.maxBytes,
+    ...(options.maxBytes === undefined ? {} : { maxBytes: options.maxBytes }),
+    ...(options.maxBase64Bytes === undefined ? {} : { maxBase64Bytes: options.maxBase64Bytes }),
     ...(options.search === undefined ? {} : { search: options.search }),
   };
 }
@@ -2638,15 +2692,22 @@ function createProcessor(options: ResolvedOptions): Rastermill {
             options.maxInputPixels,
           )
         : undefined;
-      const { limits: _limits, maxBytes, search, ...specificOptions } = encodeOptions;
+      const {
+        limits: _limits,
+        maxBytes,
+        maxBase64Bytes,
+        search,
+        ...specificOptions
+      } = encodeOptions;
       const exactOptions = {
         ...specificOptions,
         ...(resize === undefined ? {} : { resize }),
       } satisfies SpecificEncodeOptions;
-      if (maxBytes !== undefined) {
+      if (maxBytes !== undefined || maxBase64Bytes !== undefined) {
         return await rastermill.encodeWithBudget(buffer, {
           ...exactOptions,
-          maxBytes,
+          ...(maxBytes === undefined ? {} : { maxBytes }),
+          ...(maxBase64Bytes === undefined ? {} : { maxBase64Bytes }),
           ...(search === undefined ? {} : { search }),
         });
       }
@@ -2801,7 +2862,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
 
     async encodeWithBudget(input, encodeOptions) {
       const buffer = toBuffer(input);
-      const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
+      const budget = normalizeByteBudget(encodeOptions);
       const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
       const orientedMetadata = autoOrientedMetadata(
         buffer,
@@ -2850,7 +2911,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                         ...(quality === undefined ? {} : { quality }),
                         resize: nextResize,
                       });
-              const withinBudget = out.bytes <= maxBytes;
+              const withinBudget = isWithinByteBudget(out, budget);
               const candidate = {
                 ...out,
                 withinBudget,
@@ -2900,7 +2961,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
           ? "flattened"
           : "not-present";
 
-      if (encodeOptions.maxBytes === undefined) {
+      if (!hasByteBudget(encodeOptions)) {
         const out = await rastermill.encodeDirect(
           buffer,
           encodeAutoFormatOptions(firstFormat, encodeOptions),
@@ -2908,12 +2969,10 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         return bestChosen(out, firstTransparency);
       }
 
-      const maxBytes = normalizePositiveInteger(encodeOptions.maxBytes, "maxBytes");
       const first = await rastermill.encodeWithBudget(
         buffer,
         encodeAutoWithinBytesOptions(firstFormat, {
           ...encodeOptions,
-          maxBytes,
         }),
       );
       if (!useTransparent || first.withinBudget || encodeOptions.transparency === "preserve") {
@@ -2923,7 +2982,6 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         buffer,
         encodeAutoWithinBytesOptions(encodeOptions.opaque, {
           ...encodeOptions,
-          maxBytes,
         }),
       );
       return bestChosen(flattened, alpha.hasAlphaChannel ? "flattened" : "not-present");
@@ -2944,7 +3002,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       );
       if (
         !effectiveResize &&
-        encodeOptions.maxBytes === undefined &&
+        !hasByteBudget(encodeOptions) &&
         encodeOptions.transparency !== "flatten" &&
         header
       ) {
@@ -2969,6 +3027,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         transparency: encodeOptions.transparency,
         ...(effectiveResize === undefined ? {} : { resize: effectiveResize }),
         ...(encodeOptions.maxBytes === undefined ? {} : { maxBytes: encodeOptions.maxBytes }),
+        ...(encodeOptions.maxBase64Bytes === undefined
+          ? {}
+          : { maxBase64Bytes: encodeOptions.maxBase64Bytes }),
         ...(encodeOptions.search === undefined ? {} : { search: encodeOptions.search }),
         ...(encodeOptions.autoOrient === undefined ? {} : { autoOrient: encodeOptions.autoOrient }),
         ...(encodeOptions.metadata === undefined ? {} : { metadata: encodeOptions.metadata }),

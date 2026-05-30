@@ -509,7 +509,13 @@ describe("Rastermill", () => {
       quality: 82,
     });
 
-    expect(jpeg).toMatchObject({ format: "jpeg", width: 4, height: 2, bytes: jpeg.data.length });
+    expect(jpeg).toMatchObject({
+      format: "jpeg",
+      width: 4,
+      height: 2,
+      bytes: jpeg.data.length,
+      base64Bytes: Buffer.byteLength(jpeg.data.toString("base64"), "utf8"),
+    });
     expect(readImageMetadataFromHeader(jpeg.data)).toEqual({ width: 4, height: 2 });
   });
 
@@ -631,6 +637,22 @@ describe("Rastermill", () => {
     expect(result.withinBudget).toBe(true);
     expect(result.chosen.maxSide).toBeGreaterThan(0);
     expect(result.chosen.quality).toBeGreaterThan(0);
+  });
+
+  it("searches output settings against a base64 byte budget", async () => {
+    const rastermill = createRastermill();
+    const source = gradientRgbaImage(96, 96);
+
+    const result = await rastermill.encode(source, {
+      format: "jpeg",
+      maxBase64Bytes: 2_000,
+      search: { maxSide: [64, 32, 16], quality: [80, 50] },
+    });
+
+    expect(result.withinBudget).toBe(true);
+    expect(result.base64Bytes).toBeLessThanOrEqual(2_000);
+    expect(result.base64Bytes).toBe(Buffer.byteLength(result.data.toString("base64"), "utf8"));
+    expect(result.chosen.maxSide).toBeGreaterThan(0);
   });
 
   it("reports when byte-budget search returns the smallest oversized candidate", async () => {

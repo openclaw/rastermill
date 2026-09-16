@@ -1341,10 +1341,12 @@ async function runWithBackends(format, options, backendOptions, fn) {
     const errors = [];
     const backends = backendsForFormat(format, options.execution, backendOptions);
     for (const backend of backends) {
+        backendOptions.signal?.throwIfAborted();
         try {
             return await fn(backend);
         }
         catch (error) {
+            backendOptions.signal?.throwIfAborted();
             errors.push(error);
             const classification = classifyBackendError(error);
             if (classification === "unavailable")
@@ -1441,11 +1443,13 @@ async function withImageTemp(options, fn) {
     }
 }
 async function runTool(command, args, options, signal) {
+    signal?.throwIfAborted();
     await execFileAsync(command, args, {
         timeout: options.timeoutMs,
         maxBuffer: options.maxProcessBufferBytes,
         ...(signal === undefined ? {} : { signal }),
     });
+    signal?.throwIfAborted();
 }
 function convertToolArgs(tool, args) {
     return tool.flavor === "gm" ? ["convert", ...args] : args;
@@ -2170,6 +2174,7 @@ function createProcessor(options) {
         },
         async encode(input, rawOptions) {
             const encodeOptions = normalizeEncodeOptions(rawOptions);
+            encodeOptions.signal?.throwIfAborted();
             if (isAutoEncodeOptions(encodeOptions)) {
                 if (encodeOptions.limits) {
                     const { format: _format, ...optionsWithoutFormat } = encodeOptions;
@@ -2200,6 +2205,7 @@ function createProcessor(options) {
             return await rastermill.encodeDirect(buffer, exactOptions);
         },
         async encodeDirect(input, encodeOptions) {
+            encodeOptions.signal?.throwIfAborted();
             const buffer = toBuffer(input);
             const header = readImageProbeFromHeader(buffer);
             const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
@@ -2224,9 +2230,16 @@ function createProcessor(options) {
             if (canReuseInputEncoding(buffer, encodeOptions.format, header, resize, encodeOptions)) {
                 return encodedImage(buffer, encodeOptions.format, "preserved");
             }
-            const out = await runWithBackends(encodeOptions.format, options, { webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined }, async (backend) => {
+            const out = await runWithBackends(encodeOptions.format, options, {
+                webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined,
+                ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+            }, async (backend) => {
                 if (backend === "photon") {
                     const { photon, image } = await loadOrientedPhotonImage(buffer, options.maxInputPixels, encodeOptions.autoOrient !== false);
+                    if (encodeOptions.signal?.aborted) {
+                        image.free();
+                        encodeOptions.signal.throwIfAborted();
+                    }
                     const resized = resizePhotonImage(photon, image, resize);
                     try {
                         if (encodeOptions.format === "jpeg") {
@@ -2305,6 +2318,7 @@ function createProcessor(options) {
                 }
                 throw new Error(`Image backend ${backend} is not available for PNG encoding`);
             });
+            encodeOptions.signal?.throwIfAborted();
             return withResizeStatus(out, orientedMetadata, resize);
         },
         async encodeWithBudget(input, encodeOptions) {
@@ -2317,7 +2331,9 @@ function createProcessor(options) {
                 : defaultSearchMaxSides(encodeOptions.format, encodeOptions.resize, orientedMetadata);
             const qualities = encodeOptions.search?.quality?.length
                 ? [...encodeOptions.search.quality]
-                : [85, 75, 65, 55, 45, 35];
+                : encodeOptions.format === "webp" && encodeOptions.quality === undefined
+                    ? [undefined]
+                    : [85, 75, 65, 55, 45, 35];
             const compressionLevels = encodeOptions.search?.compressionLevel?.length
                 ? [...encodeOptions.search.compressionLevel]
                 : [...DEFAULT_PNG_COMPRESSION_LEVELS];
@@ -2368,6 +2384,7 @@ function createProcessor(options) {
                             }
                         }
                         catch (error) {
+                            encodeOptions.signal?.throwIfAborted();
                             firstEncodeError ??= error;
                         }
                     }

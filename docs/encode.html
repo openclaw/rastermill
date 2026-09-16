@@ -219,7 +219,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <ul>
 <li>JPEG/WebP search <code>quality</code> and <code>maxSide</code>.</li>
 <li>PNG searches <code>compressionLevel</code> and <code>maxSide</code>.</li>
-<li>WebP quality search requires an external backend; internal Photon WebP can only participate in resize-only searches.</li>
+<li>WebP quality search requires an external backend; internal Photon WebP can only participate in resize-only searches. Omit both <code>quality</code> and <code>search.quality</code> to search dimensions using Photon&#39;s fixed-quality encoder.</li>
 </ul>
 <p>The result always includes <code>bytes</code>, <code>base64Bytes</code>, <code>withinBudget</code>, and <code>chosen</code> so callers can see what Rastermill selected.</p>
 <h2 id="dimension-limits"><a class="anchor" href="#dimension-limits" aria-label="Anchor link">#</a>Dimension Limits</h2>
@@ -256,9 +256,11 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <h2 id="orientation"><a class="anchor" href="#orientation" aria-label="Anchor link">#</a>Orientation</h2>
 <p>JPEG EXIF orientation is applied by default so the output pixels are upright. Pass <code>autoOrient: false</code> to keep the original pixel layout. HEIC/AVIF orientation is delegated to the native backend and may vary by tool.</p>
 <p>Orientation is pixel work, not metadata preservation. If Rastermill applies orientation, the output is re-encoded and reports <code>metadata: &quot;stripped&quot;</code>.</p>
+<h2 id="cancellation"><a class="anchor" href="#cancellation" aria-label="Anchor link">#</a>Cancellation</h2>
+<p>Pass an <code>AbortSignal</code> in <code>signal</code> to cancel encoding. An already-aborted signal rejects before processing, including metadata passthrough. Cancellation stops native processes and byte-budget searches; a cancelled search rejects instead of returning a candidate produced before cancellation. In-process pixel work is synchronous, so cancellation is checked at asynchronous boundaries.</p>
 <h2 id="pixel-budgets"><a class="anchor" href="#pixel-budgets" aria-label="Anchor link">#</a>Pixel Budgets</h2>
 <p><code>encode</code> enforces both budgets: the decoded input must be within <code>limits.inputPixels</code>, and the projected resize target must be within <code>limits.outputPixels</code>. Violations throw before any backend runs. See <a href="configuration.html">Configuration</a>.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="transparency.html"><small>Previous</small><span>transparency</span></a><a class="page-nav-next" href="backends.html"><small>Next</small><span>Backends</span></a></nav></article>
-        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#exact-format">Exact Format</a><a class="toc-l2" href="#auto-format">Auto Format</a><a class="toc-l2" href="#byte-budgets">Byte Budgets</a><a class="toc-l2" href="#dimension-limits">Dimension Limits</a><a class="toc-l2" href="#resize">Resize</a><a class="toc-l2" href="#metadata">Metadata</a><a class="toc-l2" href="#format-conversion">Format Conversion</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#pixel-budgets">Pixel Budgets</a></nav>
+        <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#exact-format">Exact Format</a><a class="toc-l2" href="#auto-format">Auto Format</a><a class="toc-l2" href="#byte-budgets">Byte Budgets</a><a class="toc-l2" href="#dimension-limits">Dimension Limits</a><a class="toc-l2" href="#resize">Resize</a><a class="toc-l2" href="#metadata">Metadata</a><a class="toc-l2" href="#format-conversion">Format Conversion</a><a class="toc-l2" href="#orientation">Orientation</a><a class="toc-l2" href="#cancellation">Cancellation</a><a class="toc-l2" href="#pixel-budgets">Pixel Budgets</a></nav>
       </div>
     </main>
   </div>

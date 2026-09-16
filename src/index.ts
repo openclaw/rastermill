@@ -1902,15 +1902,17 @@ function classifyBackendError(error: unknown): "unavailable" | "undecodable" | "
 async function runWithBackends<T>(
   format: EncodedImageFormat,
   options: ResolvedOptions,
-  backendOptions: { webpQuality?: boolean },
+  backendOptions: { webpQuality?: boolean; signal?: AbortSignal },
   fn: (backend: ImageBackend) => Promise<T>,
 ): Promise<T> {
   const errors: unknown[] = [];
   const backends = backendsForFormat(format, options.execution, backendOptions);
   for (const backend of backends) {
+    backendOptions.signal?.throwIfAborted();
     try {
       return await fn(backend);
     } catch (error) {
+      backendOptions.signal?.throwIfAborted();
       errors.push(error);
       const classification = classifyBackendError(error);
       if (classification === "unavailable") continue;
@@ -2036,11 +2038,13 @@ async function runTool(
   options: ResolvedOptions,
   signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   await execFileAsync(command, args, {
     timeout: options.timeoutMs,
     maxBuffer: options.maxProcessBufferBytes,
     ...(signal === undefined ? {} : { signal }),
   });
+  signal?.throwIfAborted();
 }
 
 function convertToolArgs(
@@ -2960,6 +2964,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
 
     async encode(input, rawOptions) {
       const encodeOptions = normalizeEncodeOptions(rawOptions);
+      encodeOptions.signal?.throwIfAborted();
       if (isAutoEncodeOptions(encodeOptions)) {
         if (encodeOptions.limits) {
           const { format: _format, ...optionsWithoutFormat } = encodeOptions;
@@ -3004,6 +3009,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
     },
 
     async encodeDirect(input, encodeOptions) {
+      encodeOptions.signal?.throwIfAborted();
       const buffer = toBuffer(input);
       const header = readImageProbeFromHeader(buffer);
       const metadata = assertHeaderPixelBudget(buffer, options.maxInputPixels);
@@ -3038,7 +3044,10 @@ function createProcessor(options: ResolvedOptions): Rastermill {
       const out = await runWithBackends(
         encodeOptions.format,
         options,
-        { webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined },
+        {
+          webpQuality: encodeOptions.format === "webp" && encodeOptions.quality !== undefined,
+          ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+        },
         async (backend) => {
           if (backend === "photon") {
             const { photon, image } = await loadOrientedPhotonImage(
@@ -3046,6 +3055,10 @@ function createProcessor(options: ResolvedOptions): Rastermill {
               options.maxInputPixels,
               encodeOptions.autoOrient !== false,
             );
+            if (encodeOptions.signal?.aborted) {
+              image.free();
+              encodeOptions.signal.throwIfAborted();
+            }
             const resized = resizePhotonImage(photon, image, resize);
             try {
               if (encodeOptions.format === "jpeg") {
@@ -3164,6 +3177,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
           throw new Error(`Image backend ${backend} is not available for PNG encoding`);
         },
       );
+      encodeOptions.signal?.throwIfAborted();
       return withResizeStatus(out, orientedMetadata, resize);
     },
 
@@ -3181,7 +3195,9 @@ function createProcessor(options: ResolvedOptions): Rastermill {
         : defaultSearchMaxSides(encodeOptions.format, encodeOptions.resize, orientedMetadata);
       const qualities = encodeOptions.search?.quality?.length
         ? [...encodeOptions.search.quality]
-        : [85, 75, 65, 55, 45, 35];
+        : encodeOptions.format === "webp" && encodeOptions.quality === undefined
+          ? [undefined]
+          : [85, 75, 65, 55, 45, 35];
       const compressionLevels = encodeOptions.search?.compressionLevel?.length
         ? [...encodeOptions.search.compressionLevel]
         : [...DEFAULT_PNG_COMPRESSION_LEVELS];
@@ -3236,6 +3252,7 @@ function createProcessor(options: ResolvedOptions): Rastermill {
                 return candidate;
               }
             } catch (error) {
+              encodeOptions.signal?.throwIfAborted();
               firstEncodeError ??= error;
             }
           }

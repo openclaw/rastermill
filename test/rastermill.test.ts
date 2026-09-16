@@ -2177,6 +2177,88 @@ describe("Rastermill", () => {
     }
   });
 
+  it.each(["internal", "auto"] as const)(
+    "searches WebP dimensions without requiring native quality control in %s mode",
+    async (execution) => {
+      const commandResolver = vi.fn<() => null>(() => null);
+      const rastermill = createRastermill({ execution, commandResolver });
+      const pixels = new Uint8Array(128 * 64 * 4);
+      let seed = 42;
+      for (let index = 0; index < pixels.length; index += 1) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        pixels[index] = index % 4 === 3 ? 255 : seed >>> 24;
+      }
+      const source = encodePngRgba(pixels, 128, 64);
+      const smaller = await rastermill.encode(source, {
+        format: "webp",
+        resize: { maxSide: 8 },
+      });
+
+      const result = await rastermill.encode(source, {
+        format: "webp",
+        maxBytes: smaller.bytes,
+        search: { maxSide: [128, 8] },
+      });
+
+      expect(result).toMatchObject({ format: "webp", width: 8, height: 4, withinBudget: true });
+      expect(result.chosen).not.toHaveProperty("quality");
+      expect(commandResolver).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { format: "png" },
+    { format: "auto" },
+    { format: "auto", limits: { maxWidth: 16 } },
+    { format: "png", metadata: "preserve" },
+    { format: "png", maxBytes: 1 },
+    { format: "png", maxBase64Bytes: 4 },
+  ] as const)("rejects pre-aborted encoding with %j", async (options) => {
+    const reason = new Error("Encoding cancelled");
+    const commandResolver = vi.fn<() => null>(() => null);
+    for (const execution of ["internal", "external"] as const) {
+      const rastermill = createRastermill({ execution, commandResolver });
+      await expect(
+        rastermill.encode(rgbaImage(4, 4), { ...options, signal: AbortSignal.abort(reason) }),
+      ).rejects.toBe(reason);
+    }
+    expect(commandResolver).not.toHaveBeenCalled();
+  });
+
+  it("rejects cancellation during budget search instead of returning an earlier candidate", async () => {
+    const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-abort-budget-"));
+    try {
+      const script = path.join(tmp, "magick.js");
+      const log = path.join(tmp, "args.jsonl");
+      await writeImageToolScript(script, log, { png: rgbaImage(4, 4) });
+      const controller = new AbortController();
+      const reason = new Error("Encoding cancelled");
+      let attempts = 0;
+      const rastermill = createRastermill({
+        execution: "external",
+        commandResolver: (command) => {
+          if (command !== "magick") return null;
+          attempts += 1;
+          if (attempts === 2) controller.abort(reason);
+          return script;
+        },
+      });
+
+      await expect(
+        rastermill.encode(rgbaImage(4, 4), {
+          format: "png",
+          maxBytes: 1,
+          search: { maxSide: [4, 2, 1], compressionLevel: [9] },
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+      expect(attempts).toBe(2);
+      expect((await readFile(log, "utf8")).trim().split("\n")).toHaveLength(1);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("rethrows the first byte-budget encode error when no candidate succeeds", async () => {
     const rastermill = createRastermill({
       execution: "external",

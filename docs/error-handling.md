@@ -86,5 +86,10 @@ runs:
 - `RASTERMILL_UNDECODABLE`: unknown dimensions or decode failure
 - `RASTERMILL_BAD_OPTION`: invalid option values, e.g. a non-positive `resize.maxSide`
 
+The grayscale-alpha PNG fallback rejects duplicate image headers before
+decompressing pixel data. Corrupt compressed data or scanlines exceeding the
+header's dimensions throw `RASTERMILL_UNDECODABLE`; decompression errors remain
+available through `cause`.
+
 Note that [`probe`](./probe.md) is lenient: it returns `null` instead of
 throwing when an image is over budget or undecodable.

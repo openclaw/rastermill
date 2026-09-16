@@ -959,7 +959,8 @@ function decodeGrayscaleAlphaPng(buffer) {
         }
         const data = buffer.subarray(dataStart, dataEnd);
         if (type === "IHDR") {
-            if (length !== 13 ||
+            if (offset !== 8 ||
+                length !== 13 ||
                 data[8] !== 8 ||
                 data[9] !== 4 ||
                 data[10] !== 0 ||
@@ -983,7 +984,18 @@ function decodeGrayscaleAlphaPng(buffer) {
         return null;
     }
     const expectedInflatedLength = (width * 2 + 1) * height;
-    const grayAlpha = unfilterPngScanlines(inflateSync(Buffer.concat(idatChunks), { maxOutputLength: expectedInflatedLength }), width, height, 2);
+    let inflated;
+    try {
+        inflated = inflateSync(Buffer.concat(idatChunks), {
+            maxOutputLength: expectedInflatedLength,
+        });
+    }
+    catch (error) {
+        throw rastermillError("RASTERMILL_UNDECODABLE", "Unable to decode grayscale-alpha PNG", {
+            cause: error,
+        });
+    }
+    const grayAlpha = unfilterPngScanlines(inflated, width, height, 2);
     if (!grayAlpha) {
         return null;
     }

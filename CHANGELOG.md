@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reject duplicate grayscale-alpha PNG headers before fallback decoding and report corrupt or oversized compressed scanlines as undecodable input.
 - Allow WebP byte-budget searches to resize through Photon when no quality control is requested.
 - Honor aborted encode signals in internal processing and metadata passthrough, and stop byte-budget searches without returning an earlier candidate after cancellation.
 

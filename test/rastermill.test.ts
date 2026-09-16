@@ -1259,6 +1259,42 @@ describe("Rastermill", () => {
     });
   });
 
+  it.each([1, 10])("rejects duplicate grayscale-alpha PNG headers of size %i", async (side) => {
+    const rastermill = createRastermill({ execution: "internal", limits: { inputPixels: 4 } });
+    const source = Buffer.concat([
+      grayscaleAlphaPng(1, 1).subarray(0, 33),
+      grayscaleAlphaPng(side, side).subarray(8),
+    ]);
+
+    await expect(rastermill.encode(source, { format: "png" })).rejects.toMatchObject({
+      code: "RASTERMILL_UNDECODABLE",
+    });
+    await expect(rastermill.transparency(source)).rejects.toMatchObject({
+      code: "RASTERMILL_UNDECODABLE",
+    });
+  });
+
+  it.each([
+    { label: "truncated deflate stream", data: Buffer.from([0]) },
+    { label: "excess scanline data", data: deflateSync(Buffer.alloc(4)) },
+  ])("normalizes grayscale-alpha PNG errors for $label", async ({ data }) => {
+    const rastermill = createRastermill({ execution: "internal" });
+    const source = Buffer.concat([
+      grayscaleAlphaPng(1, 1).subarray(0, 33),
+      pngChunk("IDAT", data),
+      pngChunk("IEND", Buffer.alloc(0)),
+    ]);
+
+    await expect(rastermill.encode(source, { format: "png" })).rejects.toMatchObject({
+      code: "RASTERMILL_UNDECODABLE",
+      cause: expect.any(Error),
+    });
+    await expect(rastermill.transparency(source)).rejects.toMatchObject({
+      code: "RASTERMILL_UNDECODABLE",
+      cause: expect.any(Error),
+    });
+  });
+
   it("detects transparent GIF pixels through Photon", async () => {
     const rastermill = createRastermill();
     const transparentGif = Buffer.from(

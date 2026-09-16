@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Allow WebP byte-budget searches to resize through Photon when no quality control is requested.
+- Honor aborted encode signals in internal processing and metadata passthrough, and stop byte-budget searches without returning an earlier candidate after cancellation.
+
 ## 0.3.4 - 2026-09-08
 
 - Decode supported BMP input through the existing bounded Photon encode path.

@@ -168,7 +168,8 @@ Search axes depend on the output format:
 - JPEG/WebP search `quality` and `maxSide`.
 - PNG searches `compressionLevel` and `maxSide`.
 - WebP quality search requires an external backend; internal Photon WebP can
-  only participate in resize-only searches.
+  only participate in resize-only searches. Omit both `quality` and
+  `search.quality` to search dimensions using Photon's fixed-quality encoder.
 
 The result always includes `bytes`, `base64Bytes`, `withinBudget`, and `chosen`
 so callers can see what Rastermill selected.
@@ -248,6 +249,14 @@ is delegated to the native backend and may vary by tool.
 
 Orientation is pixel work, not metadata preservation. If Rastermill applies
 orientation, the output is re-encoded and reports `metadata: "stripped"`.
+
+## Cancellation
+
+Pass an `AbortSignal` in `signal` to cancel encoding. An already-aborted signal
+rejects before processing, including metadata passthrough. Cancellation stops
+native processes and byte-budget searches; a cancelled search rejects instead
+of returning a candidate produced before cancellation. In-process pixel work is
+synchronous, so cancellation is checked at asynchronous boundaries.
 
 ## Pixel Budgets
 

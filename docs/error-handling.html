@@ -153,6 +153,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <li><code>RASTERMILL_UNDECODABLE</code>: unknown dimensions or decode failure</li>
 <li><code>RASTERMILL_BAD_OPTION</code>: invalid option values, e.g. a non-positive <code>resize.maxSide</code></li>
 </ul>
+<p>The grayscale-alpha PNG fallback rejects duplicate image headers before decompressing pixel data. Corrupt compressed data or scanlines exceeding the header&#39;s dimensions throw <code>RASTERMILL_UNDECODABLE</code>; decompression errors remain available through <code>cause</code>.</p>
 <p>Note that <a href="probe.html"><code>probe</code></a> is lenient: it returns <code>null</code> instead of throwing when an image is over budget or undecodable.</p><nav class="page-nav" aria-label="Pager"><a class="page-nav-prev" href="backends.html"><small>Previous</small><span>Backends</span></a></nav></article>
         <nav class="toc" aria-label="On this page"><h2>On this page</h2><a class="toc-l2" href="#rastermillerror">RastermillError</a><a class="toc-l2" href="#rastermillunavailableerror">RastermillUnavailableError</a><a class="toc-l2" href="#israstermillunavailableerror">isRastermillUnavailableError</a><a class="toc-l2" href="#unavailable-vs-real-errors">Unavailable vs. real errors</a><a class="toc-l2" href="#validation-errors">Validation errors</a></nav>
       </div>

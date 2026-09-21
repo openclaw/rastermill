@@ -46,6 +46,12 @@ try {
       }
     }
     const assert = (await import("node:assert/strict")).default;
+    const { readFile, readdir } = await import("node:fs/promises");
+    const dist = "node_modules/rastermill/dist";
+    const files = await readdir(dist);
+    assert.equal(files.includes("index.d.ts.map"), false, "declaration maps must not ship without sources");
+    assert.ok(files.includes("index.js.map"));
+    assert.doesNotMatch(await readFile(dist + "/index.d.ts", "utf8"), /sourceMappingURL=/);
     const input = rastermill.encodePngRgba(new Uint8Array([
       255, 0, 0, 255, 0, 255, 0, 128,
       0, 0, 255, 255, 255, 255, 255, 255,

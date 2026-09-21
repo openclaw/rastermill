@@ -187,4 +187,3 @@ export declare function transparency(input: ImageInput): Promise<ImageTransparen
 /** Default-instance `encode`. Metadata is stripped unless `metadata: "preserve"` can return the original bytes unchanged. */
 export declare function encode(input: ImageInput, options?: EncodeOptions): Promise<EncodedImage>;
 export {};
-//# sourceMappingURL=index.d.ts.map

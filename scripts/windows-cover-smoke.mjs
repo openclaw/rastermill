@@ -24,6 +24,33 @@ function bandedImage(width, height) {
   return encodePngRgba(pixels, width, height);
 }
 
+const converted = await rastermill.encode(bandedImage(200, 100), {
+  format: "jpeg",
+  quality: 95,
+});
+assert.equal(converted.width, 200);
+assert.equal(converted.height, 100);
+assert.equal(converted.resized, false);
+assert.equal(converted.metadata, "stripped");
+const convertedPixels = PhotonImage.new_from_byteslice(converted.data);
+try {
+  assert.equal(convertedPixels.get_width(), 200);
+  assert.equal(convertedPixels.get_height(), 100);
+  const pixels = convertedPixels.get_raw_pixels();
+  for (const [x, channel] of [
+    [10, 0],
+    [100, 1],
+    [190, 2],
+  ]) {
+    const rgb = Array.from(pixels.slice((50 * 200 + x) * 4, (50 * 200 + x) * 4 + 3));
+    assert.ok(rgb[channel] > 180, `no-resize JPEG: expected channel ${channel}, got ${rgb}`);
+    assert.ok(rgb.filter((_, c) => c !== channel).every((value) => value < 80));
+  }
+  console.log("jpeg no-resize conversion: 200x100, red/green/blue bands preserved");
+} finally {
+  convertedPixels.free();
+}
+
 for (const format of ["jpeg", "png"]) {
   for (const sample of [
     { name: "landscape", width: 200, height: 100, target: 100, output: 100 },

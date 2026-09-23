@@ -216,6 +216,10 @@ type ResizeOptions = {
 - Omit `resize` entirely to re-encode at the original size. This is how you do a
   straight format conversion.
 
+Windows-native JPEG conversion also works without `resize`; supported inputs
+keep their dimensions unless auto-orientation swaps the axes. HEIC/AVIF and WebP
+fall through to a compatible external codec.
+
 By default the image is never enlarged; set `enlarge: true` to allow upscaling.
 Cover crops are centered on both axes, including with the Windows-native backend.
 Use `fill` when stretching to the requested dimensions is intentional.

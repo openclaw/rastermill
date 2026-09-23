@@ -1836,6 +1836,7 @@ describe("Rastermill", () => {
       expect(invocations[1]).toContain("60");
       expect(invocations[1]).toContain("-nostdin");
       expect(invocations[2]).toContain("-nostdin");
+      expect(invocations[2]).not.toContain("-vf");
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
@@ -1864,10 +1865,95 @@ describe("Rastermill", () => {
       expect(args).toContain("-auto-orient");
       expect(args).toContain("-quality");
       expect(args).toContain("91");
+      expect(args).not.toContain("-resize");
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "uses Windows native JPEG encoding without a resize request",
+    async () => {
+      const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-win-jpeg-"));
+      try {
+        const log = path.join(tmp, "powershell.json");
+        const powershell = await writeHostCommand(tmp, "powershell", [
+          "const fs = require('node:fs');",
+          "const args = process.argv.slice(2);",
+          `fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(args));`,
+          `fs.writeFileSync(args[args.indexOf('-File') + 3], Buffer.from(${JSON.stringify(jpegWithAppMetadata(8, 4).toString("base64"))}, 'base64'));`,
+        ]);
+        await withStubbedPlatform("win32", async () => {
+          const rastermill = createRastermill({
+            execution: "external",
+            commandResolver: (command) => (command === "powershell" ? powershell : null),
+          });
+          for (const quality of [undefined, 77]) {
+            const result = await rastermill.encode(rgbaImage(8, 4), {
+              format: "jpeg",
+              ...(quality === undefined ? {} : { quality }),
+              autoOrient: false,
+            });
+            expect(result).toMatchObject({
+              format: "jpeg",
+              width: 8,
+              height: 4,
+              resized: false,
+              metadata: "stripped",
+            });
+            const args = JSON.parse(await readFile(log, "utf8")) as string[];
+            expect(args.slice(-7)).toEqual([
+              String(quality ?? 85),
+              "jpeg",
+              "8",
+              "4",
+              "8",
+              "4",
+              "0",
+            ]);
+          }
+        });
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "skips Windows native WebP decoding with and without resize",
+    async () => {
+      const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-win-webp-"));
+      try {
+        const log = path.join(tmp, "powershell.log");
+        const powershell = await writeHostCommand(tmp, "powershell", [
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(${JSON.stringify(log)}, 'unexpected GDI+ decode');`,
+          "process.exit(1);",
+        ]);
+        const magick = await writeHostCommand(tmp, "magick", [
+          "const fs = require('node:fs');",
+          `fs.writeFileSync(process.argv.at(-1), Buffer.from(${JSON.stringify(jpegWithAppMetadata(4, 4).toString("base64"))}, 'base64'));`,
+        ]);
+        await withStubbedPlatform("win32", async () => {
+          const rastermill = createRastermill({
+            execution: "external",
+            commandResolver: (command) =>
+              command === "powershell" ? powershell : command === "magick" ? magick : null,
+          });
+          for (const resize of [undefined, { maxSide: 4 }]) {
+            const result = await rastermill.encode(losslessWebpHeader(4, 4, false), {
+              format: "jpeg",
+              ...(resize === undefined ? {} : { resize }),
+            });
+            expect(result).toMatchObject({ format: "jpeg", width: 4, height: 4 });
+          }
+          expect(existsSync(log)).toBe(false);
+        });
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("skips Windows native HEIC/AVIF resize so later backends can run", async () => {
     const tmp = await mkdtemp(path.join(os.tmpdir(), "rastermill-win-heic-resize-"));
@@ -2110,6 +2196,7 @@ describe("Rastermill", () => {
           .map((line) => JSON.parse(line) as string[]);
         expect(invocations[0]).toEqual(expect.arrayContaining(["-r", "90", "--out"]));
         expect(invocations[1]).toEqual(expect.arrayContaining(["-s", "format", "jpeg"]));
+        expect(invocations[1]).not.toContain("-z");
       } finally {
         await rm(tmp, { recursive: true, force: true });
       }

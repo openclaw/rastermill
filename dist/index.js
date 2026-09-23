@@ -1636,6 +1636,9 @@ async function windowsNativeResize(tool, buffer, native, format, options) {
     if (probe?.format === "heif" || probe?.format === "avif") {
         throw new Error("Windows native image backend does not convert HEIC to JPEG");
     }
+    if (probe?.format === "webp") {
+        throw new Error("Windows native image backend cannot decode WebP");
+    }
     return await withImageTemp(options, async (workspace) => {
         const scriptPath = await workspace.write("resize.ps1", Buffer.from(WINDOWS_NATIVE_RESIZE_SCRIPT, "utf8"));
         const input = await workspace.write("in.img", buffer);
@@ -1650,7 +1653,7 @@ async function windowsNativeResize(tool, buffer, native, format, options) {
             scriptPath,
             input,
             output,
-            String(clampInteger(native.quality ?? 90, 1, 100)),
+            String(clampInteger(native.quality ?? DEFAULT_JPEG_QUALITY, 1, 100)),
             format,
             String(native.target.width),
             String(native.target.height),
@@ -1661,7 +1664,7 @@ async function windowsNativeResize(tool, buffer, native, format, options) {
         return await workspace.read(outputName);
     });
 }
-async function externalToJpeg(backend, buffer, native, options) {
+async function externalToJpeg(backend, buffer, native, options, resize) {
     const tool = await resolveExternalTool(backend, options);
     if (!tool) {
         throw new Error(`Image backend ${backend} is not available`);
@@ -1674,38 +1677,30 @@ async function externalToJpeg(backend, buffer, native, options) {
                 : await sipsApplyOrientation(tool, buffer, options, native.signal);
             const input = await workspace.write("in.img", oriented);
             const output = workspace.path("out.jpg");
-            const args = native.fit === "cover"
-                ? [
-                    "-z",
-                    String(native.scaledTarget.height),
-                    String(native.scaledTarget.width),
-                    "--cropToHeightWidth",
-                    String(native.target.height),
-                    String(native.target.width),
-                    "-s",
-                    "format",
-                    "jpeg",
-                    "-s",
-                    "formatOptions",
-                    String(quality),
-                    input,
-                    "--out",
-                    output,
-                ]
-                : [
-                    "-z",
-                    String(native.target.height),
-                    String(native.target.width),
-                    "-s",
-                    "format",
-                    "jpeg",
-                    "-s",
-                    "formatOptions",
-                    String(quality),
-                    input,
-                    "--out",
-                    output,
-                ];
+            const resizeArgs = !resize
+                ? []
+                : native.fit === "cover"
+                    ? [
+                        "-z",
+                        String(native.scaledTarget.height),
+                        String(native.scaledTarget.width),
+                        "--cropToHeightWidth",
+                        String(native.target.height),
+                        String(native.target.width),
+                    ]
+                    : ["-z", String(native.target.height), String(native.target.width)];
+            const args = [
+                ...resizeArgs,
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                String(quality),
+                input,
+                "--out",
+                output,
+            ];
             await runTool(tool.command, args, options, native.signal);
             return await workspace.read("out.jpg");
         });
@@ -1723,8 +1718,7 @@ async function externalToJpeg(backend, buffer, native, options) {
                 "-i",
                 input,
                 ...ffmpegStripArgs(),
-                "-vf",
-                buildFfmpegResizeFilter(native.target, native.fit),
+                ...(resize ? ["-vf", buildFfmpegResizeFilter(native.target, native.fit)] : []),
                 "-frames:v",
                 "1",
                 "-q:v",
@@ -1735,7 +1729,7 @@ async function externalToJpeg(backend, buffer, native, options) {
         }
         const args = [
             firstImageScene(tool, input),
-            ...convertResizeArgs(native),
+            ...(resize ? convertResizeArgs(native) : []),
             ...convertStripArgs(),
             "-quality",
             String(quality),
@@ -1810,49 +1804,6 @@ async function externalToWebp(backend, buffer, native, options) {
         }
         await runConvertTool(tool, args, options, native.signal);
         return await workspace.read("out.webp");
-    });
-}
-async function externalConvertToJpeg(backend, buffer, options, jpegOptions = {}) {
-    const tool = await resolveExternalTool(backend, options);
-    if (!tool) {
-        throw new Error(`Image backend ${backend} is not available`);
-    }
-    const quality = clampInteger(jpegOptions.quality ?? DEFAULT_JPEG_QUALITY, 1, 100);
-    const autoOrient = jpegOptions.autoOrient !== false;
-    return await withImageTemp(options, async (workspace) => {
-        const oriented = tool.flavor === "sips" && autoOrient
-            ? await sipsApplyOrientation(tool, buffer, options, jpegOptions.signal)
-            : buffer;
-        const input = await workspace.write("in.img", oriented);
-        const output = workspace.path("out.jpg");
-        if (tool.flavor === "sips") {
-            await runTool(tool.command, ["-s", "format", "jpeg", "-s", "formatOptions", String(quality), input, "--out", output], options, jpegOptions.signal);
-        }
-        else if (tool.flavor === "powershell") {
-            throw new Error("Windows native image backend does not convert HEIC to JPEG");
-        }
-        else if (tool.flavor === "ffmpeg") {
-            await runTool(tool.command, [
-                ...ffmpegCommonArgs(),
-                "-i",
-                input,
-                ...ffmpegStripArgs(),
-                "-frames:v",
-                "1",
-                "-q:v",
-                String(clampInteger(31 - quality * 0.29, 2, 31)),
-                output,
-            ], options, jpegOptions.signal);
-        }
-        else {
-            const args = [firstImageScene(tool, input)];
-            if (autoOrient) {
-                args.push("-auto-orient");
-            }
-            args.push(...convertStripArgs(), "-quality", String(quality), output);
-            await runConvertTool(tool, args, options, jpegOptions.signal);
-        }
-        return await workspace.read("out.jpg");
     });
 }
 function readRequiredEncodedMetadata(data, format) {
@@ -2273,28 +2224,15 @@ function createProcessor(options) {
                 }
                 const nativeBackend = backend;
                 if (encodeOptions.format === "jpeg") {
-                    // No resize means a straight decode-and-encode (e.g. HEIC/AVIF to JPEG).
-                    const jpeg = encodeOptions.resize
-                        ? await externalToJpeg(nativeBackend, buffer, {
-                            ...nativeResizeOptions(orientedMetadata, resize),
-                            ...(encodeOptions.quality === undefined
-                                ? {}
-                                : { quality: encodeOptions.quality }),
-                            ...(encodeOptions.autoOrient === undefined
-                                ? {}
-                                : { autoOrient: encodeOptions.autoOrient }),
-                            ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-                            metadata: normalizeMetadataPolicy(encodeOptions.metadata),
-                        }, options)
-                        : await externalConvertToJpeg(nativeBackend, buffer, options, {
-                            ...(encodeOptions.quality === undefined
-                                ? {}
-                                : { quality: encodeOptions.quality }),
-                            ...(encodeOptions.autoOrient === undefined
-                                ? {}
-                                : { autoOrient: encodeOptions.autoOrient }),
-                            ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
-                        });
+                    const jpeg = await externalToJpeg(nativeBackend, buffer, {
+                        ...nativeResizeOptions(orientedMetadata, resize),
+                        ...(encodeOptions.quality === undefined ? {} : { quality: encodeOptions.quality }),
+                        ...(encodeOptions.autoOrient === undefined
+                            ? {}
+                            : { autoOrient: encodeOptions.autoOrient }),
+                        ...(encodeOptions.signal === undefined ? {} : { signal: encodeOptions.signal }),
+                        metadata: normalizeMetadataPolicy(encodeOptions.metadata),
+                    }, options, encodeOptions.resize !== undefined);
                     return encodedImage(jpeg, "jpeg", "stripped");
                 }
                 if (encodeOptions.format === "webp") {

@@ -246,6 +246,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <li><strong><code>fill</code></strong> stretches to exactly <code>width x height</code>.</li>
 <li>Omit <code>resize</code> entirely to re-encode at the original size. This is how you do a straight format conversion.</li>
 </ul>
+<p>Windows-native JPEG conversion also works without <code>resize</code>; supported inputs keep their dimensions unless auto-orientation swaps the axes. HEIC/AVIF and WebP fall through to a compatible external codec.</p>
 <p>By default the image is never enlarged; set <code>enlarge: true</code> to allow upscaling. Cover crops are centered on both axes, including with the Windows-native backend. Use <code>fill</code> when stretching to the requested dimensions is intentional.</p>
 <h2 id="metadata"><a class="anchor" href="#metadata" aria-label="Anchor link">#</a>Metadata</h2>
 <p>Metadata is stripped by default. <code>metadata: &quot;preserve&quot;</code> is deliberately narrow: it only preserves metadata when Rastermill can return the original bytes unchanged. Photon does not expose EXIF/GPS/ICC/XMP read, write, or copy APIs, so any actual decode, resize, orientation, conversion, or quality/compression change returns fresh bytes with <code>metadata: &quot;stripped&quot;</code>.</p>

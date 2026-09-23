@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix Windows-native JPEG conversions without resize, use the documented default quality of 85, and keep WebP input on compatible codec fallbacks.
 - Stop shipping the declaration map for unpublished TypeScript sources; preserve declarations and the runtime source map.
 - Reject duplicate grayscale-alpha PNG headers before fallback decoding and report corrupt or oversized compressed scanlines as undecodable input.
 - Allow WebP byte-budget searches to resize through Photon when no quality control is requested.

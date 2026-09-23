@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: ${{ matrix.node }}
-      - uses: pnpm/action-setup@v6.0.10
+      - uses: pnpm/action-setup@v6.1.0
         with:
           cache: true
       - run: pnpm install --frozen-lockfile

@@ -2,18 +2,17 @@
 
 ## Unreleased
 
-- Free Photon images when resize or crop fails, including intermediate images allocated before a failed crop.
-- Fix Windows-native JPEG conversions without resize, use the documented default quality of 85, and keep WebP input on compatible codec fallbacks.
-- Stop shipping the declaration map for unpublished TypeScript sources; preserve declarations and the runtime source map.
-- Reject duplicate grayscale-alpha PNG headers before fallback decoding and report corrupt or oversized compressed scanlines as undecodable input.
-- Allow WebP byte-budget searches to resize through Photon when no quality control is requested.
-- Honor aborted encode signals in internal processing and metadata passthrough, and stop byte-budget searches without returning an earlier candidate after cancellation.
+## 0.4.0 - 2026-09-24
 
-## 0.3.4 - 2026-09-08
+**Highlights:** BMP inputs are now supported, Windows-native JPEG conversion works without resizing, and failed Photon transforms release their image memory.
 
-- Decode supported BMP input through the existing bounded Photon encode path.
-  Validate embedded JPEG/PNG payloads through Photon before native fallback,
-  and report native decoder rejections as undecodable input.
+- Decode supported BMP input through the bounded Photon encode path, validate embedded JPEG/PNG payloads before native fallback, and report native decoder rejections as undecodable input (thanks @vincentkoc, #10).
+- Fix Windows-native JPEG conversions without resize, use the documented default quality of 85, and keep WebP input on compatible codec fallbacks (#16).
+- Free Photon images when resize or crop fails, including intermediate images allocated before a failed crop (#17).
+- Honor aborted encode signals in internal processing and metadata passthrough, and stop byte-budget searches without returning an earlier candidate after cancellation (#12).
+- Reject duplicate grayscale-alpha PNG headers before fallback decoding and report corrupt or oversized compressed scanlines as undecodable input (#13).
+- Allow WebP byte-budget searches to resize through Photon when no quality control is requested (#12).
+- Stop shipping the declaration map for unpublished TypeScript sources; preserve declarations and the runtime source map (#14).
 
 ## 0.3.3 - 2026-09-05
 

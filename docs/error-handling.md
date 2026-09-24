@@ -76,6 +76,9 @@ timeout, an output-buffer overflow) is thrown immediately and is **not** wrapped
 in a `RastermillUnavailableError`. This way a corrupt file fails loudly instead of
 being mistaken for a missing tool.
 
+Failed Photon resize and crop operations release their image allocations before
+propagating the processing error.
+
 ## Validation errors
 
 Pixel-budget and option violations throw `RastermillError`s before any backend

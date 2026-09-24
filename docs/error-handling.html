@@ -145,6 +145,7 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 <h2 id="unavailable-vs-real-errors"><a class="anchor" href="#unavailable-vs-real-errors" aria-label="Anchor link">#</a>Unavailable vs. real errors</h2>
 <p>During automatic fallback Rastermill inspects each backend&#39;s error. If it looks like the backend is merely <em>unavailable</em> — for example <code>ENOENT</code>, a missing executable, a missing Photon package, an unsupported format, or a missing codec delegate — Rastermill records it and tries the next backend.</p>
 <p>Any other error (a present backend rejecting a genuinely malformed image, a timeout, an output-buffer overflow) is thrown immediately and is <strong>not</strong> wrapped in a <code>RastermillUnavailableError</code>. This way a corrupt file fails loudly instead of being mistaken for a missing tool.</p>
+<p>Failed Photon resize and crop operations release their image allocations before propagating the processing error.</p>
 <h2 id="validation-errors"><a class="anchor" href="#validation-errors" aria-label="Anchor link">#</a>Validation errors</h2>
 <p>Pixel-budget and option violations throw <code>RastermillError</code>s before any backend runs:</p>
 <ul>

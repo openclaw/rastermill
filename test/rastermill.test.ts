@@ -2882,51 +2882,60 @@ describe("Rastermill", () => {
     },
   );
 
-  it("does not fall back to native tools after a real Photon processing error", async () => {
-    vi.resetModules();
-    vi.doMock("@silvia-odwyer/photon-node", () => {
-      class MockPhotonImage {
-        static new_from_byteslice = vi.fn<() => MockPhotonImage>(() => new MockPhotonImage());
-        free(): void {}
-        get_bytes_webp(): Uint8Array {
-          return new Uint8Array();
+  it.each(["resize", "crop"] as const)(
+    "frees Photon images after a %s error without falling back",
+    async (failure) => {
+      vi.resetModules();
+      const frees: ReturnType<typeof vi.fn>[] = [];
+      vi.doMock("@silvia-odwyer/photon-node", () => {
+        class MockPhotonImage {
+          static new_from_byteslice = vi.fn<() => MockPhotonImage>(() => new MockPhotonImage());
+          free = vi.fn<() => void>();
+          constructor(private readonly side = 4) {
+            frees.push(this.free);
+          }
+          get_height(): number {
+            return this.side;
+          }
+          get_width(): number {
+            return this.side;
+          }
         }
-        get_height(): number {
-          return 4;
-        }
-        get_width(): number {
-          return 4;
-        }
-      }
-      return {
-        PhotonImage: MockPhotonImage,
-        SamplingFilter: {
-          Lanczos3: 1,
+        return {
+          PhotonImage: MockPhotonImage,
+          SamplingFilter: {
+            Lanczos3: 1,
+          },
+          crop: vi.fn<() => never>(() => {
+            throw new Error("corrupt image payload");
+          }),
+          resize: vi.fn<() => MockPhotonImage>(() => {
+            if (failure === "resize") throw new Error("corrupt image payload");
+            return new MockPhotonImage(2);
+          }),
+        };
+      });
+
+      const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
+        await import("../src/index.js");
+      const requested: string[] = [];
+      const rastermill = createFreshRastermill({
+        commandResolver: (command) => {
+          requested.push(command);
+          return command;
         },
-        crop: vi.fn<() => void>(),
-        resize: vi.fn<() => never>(() => {
-          throw new Error("corrupt image payload");
+      });
+
+      await expect(
+        rastermill.encode(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
+          format: "jpeg",
+          resize: { maxSide: 2, fit: "cover" },
+          quality: 80,
         }),
-      };
-    });
-
-    const { createRastermill: createFreshRastermill, encodePngRgba: encodeFreshPngRgba } =
-      await import("../src/index.js");
-    const requested: string[] = [];
-    const rastermill = createFreshRastermill({
-      commandResolver: (command) => {
-        requested.push(command);
-        return command;
-      },
-    });
-
-    await expect(
-      rastermill.encode(encodeFreshPngRgba(new Uint8Array(4 * 4 * 4), 4, 4), {
-        format: "jpeg",
-        resize: { maxSide: 2 },
-        quality: 80,
-      }),
-    ).rejects.toThrow(/corrupt image payload/);
-    expect(requested).toEqual([]);
-  });
+      ).rejects.toThrow(/corrupt image payload/);
+      expect(requested).toEqual([]);
+      expect(frees).toHaveLength(failure === "resize" ? 1 : 2);
+      for (const free of frees) expect(free).toHaveBeenCalledTimes(1);
+    },
+  );
 });

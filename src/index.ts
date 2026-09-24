@@ -1506,13 +1506,6 @@ async function loadOrientedPhotonImage(
   return { photon, image: autoOrient ? applyExifOrientation(photon, decoded, buffer) : decoded };
 }
 
-function targetSize(
-  image: PhotonImage,
-  resize: NormalizedResizeOptions,
-): { width: number; height: number } {
-  return scaledDimensions({ width: image.get_width(), height: image.get_height() }, resize);
-}
-
 type NormalizedResizeOptions = {
   fit: ResizeFit;
   width?: number;
@@ -1722,29 +1715,29 @@ function resizePhotonImage(
   resize: NormalizedResizeOptions,
 ): PhotonImage {
   const source = { width: image.get_width(), height: image.get_height() };
-  const size = targetSize(image, resize);
-  const resized =
-    size.width === image.get_width() && size.height === image.get_height()
-      ? image
-      : photon.resize(image, size.width, size.height, photon.SamplingFilter.Lanczos3);
-  if (resized !== image) {
-    image.free();
-  }
-  if (resize.fit !== "cover") {
+  const size = scaledDimensions(source, resize);
+  let resized = image;
+  try {
+    if (size.width !== source.width || size.height !== source.height) {
+      resized = photon.resize(image, size.width, size.height, photon.SamplingFilter.Lanczos3);
+      image.free();
+    }
+    const box = resizeBox(resize);
+    if (resize.fit === "cover" && box && box.width > 0 && box.height > 0) {
+      const target = finalDimensions(source, resize);
+      const cropWidth = Math.min(target.width, resized.get_width());
+      const cropHeight = Math.min(target.height, resized.get_height());
+      const left = Math.max(0, Math.floor((resized.get_width() - cropWidth) / 2));
+      const top = Math.max(0, Math.floor((resized.get_height() - cropHeight) / 2));
+      const cropped = photon.crop(resized, left, top, left + cropWidth, top + cropHeight);
+      resized.free();
+      return cropped;
+    }
     return resized;
-  }
-  const box = resizeBox(resize);
-  if (box && box.width > 0 && box.height > 0) {
-    const target = finalDimensions(source, resize);
-    const cropWidth = Math.min(target.width, resized.get_width());
-    const cropHeight = Math.min(target.height, resized.get_height());
-    const left = Math.max(0, Math.floor((resized.get_width() - cropWidth) / 2));
-    const top = Math.max(0, Math.floor((resized.get_height() - cropHeight) / 2));
-    const cropped = photon.crop(resized, left, top, left + cropWidth, top + cropHeight);
+  } catch (error) {
     resized.free();
-    return cropped;
+    throw error;
   }
-  return resized;
 }
 
 function scanRgbaTransparency(pixels: Uint8Array): boolean {

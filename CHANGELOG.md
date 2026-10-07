@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep TIFF orientation paired with each page's dimensions, size encodes from the first page while checking the largest page against input limits, and apply TIFF transforms explicitly with FFmpeg (thanks @SebTardif, #20).
+
 ## 0.4.0 - 2026-09-24
 
 **Highlights:** BMP inputs are now supported, Windows-native JPEG conversion works without resizing, and failed Photon transforms release their image memory.

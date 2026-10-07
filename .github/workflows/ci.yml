@@ -30,6 +30,8 @@ jobs:
       - uses: pnpm/action-setup@v6.1.0
         with:
           cache: true
+      - name: Install native test codecs
+        run: sudo apt-get update -qq && sudo apt-get install -y imagemagick ffmpeg
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm lint

@@ -115,7 +115,8 @@ main{min-width:0;padding:32px clamp(20px,4.5vw,56px) 80px;max-width:1180px;margi
 };</code></pre>
 <ul>
 <li><code>hasAlpha</code> is definitive for PNG (and WebP <code>VP8X</code>) and <code>false</code> for JPEG. For formats where the header doesn&#39;t carry it (<code>gif</code>, <code>bmp</code>, <code>tiff</code>, <code>heif</code>, <code>avif</code>), it is <code>null</code>.</li>
-<li><code>orientation</code> is the JPEG EXIF orientation tag when present.</li>
+<li><code>orientation</code> reports JPEG EXIF and TIFF orientation tags, or the equivalent HEIF/AVIF primary-image transform, when present.</li>
+<li>For linked TIFF pages, dimensions and orientation describe the largest page. This keeps the input pixel-budget check conservative; <code>encode</code> writes the first page using that page&#39;s own dimensions and orientation.</li>
 </ul>
 <h2 id="lenient-by-design"><a class="anchor" href="#lenient-by-design" aria-label="Anchor link">#</a>Lenient by design</h2>
 <p><code>probe</code> returns <code>null</code> — it does <strong>not</strong> throw — when the input is undecodable or its dimensions exceed <code>limits.inputPixels</code>. Encoding the same input still throws (see <a href="error-handling.html">Error handling</a>), so use <code>probe</code> for &quot;can I look at this?&quot; and <code>encode</code> for &quot;process this.&quot;</p>

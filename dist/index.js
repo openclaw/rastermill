@@ -273,7 +273,7 @@ function readTiffUnsignedInteger(buffer, offset, littleEndian) {
 function readTiffUnsignedLong(buffer, offset, littleEndian) {
     return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
 }
-function readTiffMetadata(buffer) {
+function readTiffPages(buffer) {
     if (buffer.length < 8) {
         return null;
     }
@@ -286,7 +286,7 @@ function readTiffMetadata(buffer) {
         return null;
     }
     let ifdOffset = readTiffUnsignedLong(buffer, 4, littleEndian);
-    let largest = null;
+    const pages = [];
     const seen = new Set();
     while (ifdOffset !== 0) {
         if (seen.has(ifdOffset) || ifdOffset + 2 > buffer.length) {
@@ -301,14 +301,12 @@ function readTiffMetadata(buffer) {
         }
         let width = null;
         let height = null;
+        let orientation = null;
         for (let index = 0; index < entryCount; index += 1) {
             const entryOffset = entriesStart + index * 12;
             const tag = readTiffUnsignedInteger(buffer, entryOffset, littleEndian);
             if (tag === 330) {
                 return null;
-            }
-            if (tag !== 256 && tag !== 257) {
-                continue;
             }
             const type = readTiffUnsignedInteger(buffer, entryOffset + 2, littleEndian);
             const count = readTiffUnsignedLong(buffer, entryOffset + 4, littleEndian);
@@ -321,18 +319,37 @@ function readTiffMetadata(buffer) {
             if (tag === 256) {
                 width = value;
             }
-            else {
+            else if (tag === 257) {
                 height = value;
+            }
+            else if (tag === 0x0112 && type === 3 && value >= 1 && value <= 8) {
+                orientation = value;
             }
         }
         const metadata = width === null || height === null ? null : normalizeMetadata(width, height);
         if (!metadata) {
             return null;
         }
-        largest = pickLargerImageMetadata(largest, metadata);
+        pages.push({ ...metadata, orientation });
         ifdOffset = readTiffUnsignedLong(buffer, entriesEnd, littleEndian);
     }
-    return largest;
+    return pages.length > 0 ? pages : null;
+}
+function largestTiffPage(pages) {
+    let chosen = null;
+    for (const page of pages) {
+        if (pickLargerImageMetadata(chosen, page) !== chosen) {
+            chosen = page;
+        }
+    }
+    return chosen;
+}
+function readTiffMetadata(buffer) {
+    const pages = readTiffPages(buffer);
+    return pages ? largestTiffPage(pages) : null;
+}
+function readTiffEncodedPage(buffer) {
+    return readTiffPages(buffer)?.[0] ?? null;
 }
 function readIsoBmffBoxSize(buffer, offset, end) {
     if (offset + 8 > end) {
@@ -592,8 +609,15 @@ function readIsoBmffPrimaryItemMetadata(buffer) {
 function readIsoBmffOrientation(buffer) {
     return readIsoBmffPrimaryItemMetadata(buffer)?.orientation ?? null;
 }
+function readTiffOrientation(buffer) {
+    const pages = readTiffPages(buffer);
+    return pages ? (largestTiffPage(pages)?.orientation ?? null) : null;
+}
 function readImageOrientation(buffer) {
-    return readJpegExifOrientation(buffer) ?? readIsoBmffOrientation(buffer);
+    return (readJpegExifOrientation(buffer) ??
+        readIsoBmffOrientation(buffer) ??
+        readTiffEncodedPage(buffer)?.orientation ??
+        null);
 }
 function readJpegMetadata(buffer) {
     if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
@@ -672,7 +696,13 @@ export function readImageProbeFromHeader(input) {
     }
     const tiff = readTiffMetadata(buffer);
     if (tiff) {
-        return { ...tiff, format: "tiff", hasAlpha: null, orientation: null, bytes: buffer.length };
+        return {
+            ...tiff,
+            format: "tiff",
+            hasAlpha: null,
+            orientation: readTiffOrientation(buffer),
+            bytes: buffer.length,
+        };
     }
     const primaryHeif = readIsoBmffPrimaryItemMetadata(buffer);
     const heif = primaryHeif?.metadata ?? readLargestIsoBmffImageMetadata(buffer);
@@ -1171,13 +1201,15 @@ function resizeForDimensionLimits(metadata, limits) {
     return { width, height, fit: "inside", enlarge: false };
 }
 function autoOrientedMetadata(buffer, metadata, autoOrient) {
+    const encodedPage = readTiffEncodedPage(buffer);
+    const base = encodedPage ?? metadata;
     if (!autoOrient) {
-        return metadata;
+        return { width: base.width, height: base.height };
     }
-    const orientation = readImageOrientation(buffer);
+    const orientation = encodedPage ? encodedPage.orientation : readImageOrientation(buffer);
     return orientation === 5 || orientation === 6 || orientation === 7 || orientation === 8
-        ? { width: metadata.height, height: metadata.width }
-        : metadata;
+        ? { width: base.height, height: base.width }
+        : { width: base.width, height: base.height };
 }
 function assertOutputPixelBudget(metadata, resize, maxOutputPixels) {
     const scaled = scaledDimensions(metadata, resize);
@@ -1505,6 +1537,42 @@ function ffmpegCommonArgs() {
 function ffmpegStripArgs() {
     return ["-map_metadata", "-1"];
 }
+function ffmpegTransformArgs(buffer, native, resize) {
+    const tiff = readTiffEncodedPage(buffer);
+    const orientation = native.autoOrient === false ? null : tiff?.orientation;
+    const filters = [];
+    switch (orientation) {
+        case 2:
+            filters.push("hflip");
+            break;
+        case 3:
+            filters.push("hflip", "vflip");
+            break;
+        case 4:
+            filters.push("vflip");
+            break;
+        case 5:
+            filters.push("transpose=clock", "hflip");
+            break;
+        case 6:
+            filters.push("transpose=clock");
+            break;
+        case 7:
+            filters.push("transpose=clock", "vflip");
+            break;
+        case 8:
+            filters.push("transpose=cclock");
+            break;
+    }
+    if (resize) {
+        filters.push(buildFfmpegResizeFilter(native.target, native.fit));
+    }
+    return {
+        // FFmpeg does not consistently apply TIFF orientation; own it before scaling.
+        inputArgs: tiff ? ["-noautorotate"] : [],
+        outputArgs: filters.length > 0 ? ["-vf", filters.join(",")] : [],
+    };
+}
 function sipsOrientationArgs(orientation) {
     switch (orientation) {
         case 2:
@@ -1712,12 +1780,14 @@ async function externalToJpeg(backend, buffer, native, options, resize) {
         const output = workspace.path("out.jpg");
         if (tool.flavor === "ffmpeg") {
             const qv = clampInteger(31 - quality * 0.29, 2, 31);
+            const transform = ffmpegTransformArgs(buffer, native, resize);
             await runTool(tool.command, [
                 ...ffmpegCommonArgs(),
+                ...transform.inputArgs,
                 "-i",
                 input,
                 ...ffmpegStripArgs(),
-                ...(resize ? ["-vf", buildFfmpegResizeFilter(native.target, native.fit)] : []),
+                ...transform.outputArgs,
                 "-frames:v",
                 "1",
                 "-q:v",
@@ -1775,13 +1845,14 @@ async function externalToWebp(backend, buffer, native, options) {
         const input = await workspace.write("in.img", buffer);
         const output = workspace.path("out.webp");
         if (tool.flavor === "ffmpeg") {
+            const transform = ffmpegTransformArgs(buffer, native, true);
             await runTool(tool.command, [
                 ...ffmpegCommonArgs(),
+                ...transform.inputArgs,
                 "-i",
                 input,
                 ...ffmpegStripArgs(),
-                "-vf",
-                buildFfmpegResizeFilter(native.target, native.fit),
+                ...transform.outputArgs,
                 "-frames:v",
                 "1",
                 "-quality",

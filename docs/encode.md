@@ -247,7 +247,10 @@ get a [`RastermillUnavailableError`](./error-handling.md).
 
 ## Orientation
 
-JPEG EXIF orientation is applied by default so the output pixels are upright.
+JPEG EXIF and TIFF orientation are applied by default so the output pixels are
+upright. For a multi-page TIFF, encoding uses the first page's dimensions and
+orientation, while the input pixel budget still checks the largest page. FFmpeg applies TIFF
+rotation and reflection explicitly before resizing.
 Pass `autoOrient: false` to keep the original pixel layout. HEIC/AVIF orientation
 is delegated to the native backend and may vary by tool.
 

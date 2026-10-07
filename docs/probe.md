@@ -28,7 +28,11 @@ type ImageProbe = {
 - `hasAlpha` is definitive for PNG (and WebP `VP8X`) and `false` for JPEG. For
   formats where the header doesn't carry it (`gif`, `bmp`, `tiff`, `heif`,
   `avif`), it is `null`.
-- `orientation` is the JPEG EXIF orientation tag when present.
+- `orientation` reports JPEG EXIF and TIFF orientation tags, or the equivalent
+  HEIF/AVIF primary-image transform, when present.
+- For linked TIFF pages, dimensions and orientation describe the largest page.
+  This keeps the input pixel-budget check conservative; `encode` writes the first
+  page using that page's own dimensions and orientation.
 
 ## Lenient by design
 

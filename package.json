@@ -57,16 +57,17 @@
     "@silvia-odwyer/photon-node": "0.3.4"
   },
   "devDependencies": {
-    "@types/node": "^22.20.4",
+    "@types/node": "^22.20.5",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
-    "@vitest/coverage-v8": "^5.0.1",
-    "oxfmt": "^0.70.0",
-    "oxlint": "^1.85.0",
+    "@vitest/coverage-v8": "^5.0.3",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vite": "^7.3.6",
+    "vitest": "^5.0.3"
   },
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@11.27.1"
+  "packageManager": "pnpm@11.28.4"
 }

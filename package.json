@@ -49,7 +49,7 @@
     "package:smoke": "node scripts/package-smoke.mjs /tmp/rastermill-pack",
     "prepare": "pnpm build",
     "prepack": "pnpm build",
-    "prepublishOnly": "pnpm check && pnpm lint && pnpm format:check && pnpm test:coverage && pnpm build",
+    "check:release": "pnpm check && pnpm lint && pnpm format:check && pnpm test:coverage && pnpm build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },

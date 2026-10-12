@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer with a dated changelog section
+        required: true
+        type: string
+      dry_run:
+        description: Validate and verify without creating tags or publishing
+        default: true
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.repository }}-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      statuses: read
+      id-token: write
+    uses: openclaw/release-workflows/.github/workflows/release-npm-package.yml@v1
+    with:
+      version: ${{ inputs.version || github.ref_name }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      require-signed-tag: true
+      strict-checks: true
+      ci-check-events: '["push"]'
+      node-version: "24"
+      package-manager: pnpm
+      package-manager-version: "11.28.4"
+      package-dirs: '["."]'
+      test-command: |
+        sudo apt-get update -qq
+        sudo apt-get install -y imagemagick ffmpeg
+        pnpm check:release
+        pnpm docs:check
+        git diff --exit-code -- dist
+        test -z "$(git ls-files --others -- dist)"
+      build-command: pnpm build
+      smoke-command: |
+        node --input-type=module <<'JS'
+        import assert from "node:assert/strict";
+        import { readFile, readdir } from "node:fs/promises";
+        import * as rastermill from "rastermill";
+        for (const name of ["createRastermill", "encode", "probe", "transparency", "readImageMetadataFromHeader", "readImageProbeFromHeader"]) {
+          assert.equal(typeof rastermill[name], "function", `missing export: ${name}`);
+        }
+        const dist = "node_modules/rastermill/dist";
+        const files = await readdir(dist);
+        assert.ok(files.includes("index.js.map"));
+        assert.equal(files.includes("index.d.ts.map"), false);
+        assert.doesNotMatch(await readFile(`${dist}/index.d.ts`, "utf8"), /sourceMappingURL=/);
+        const input = rastermill.encodePngRgba(new Uint8Array([
+          255, 0, 0, 255, 0, 255, 0, 128,
+          0, 0, 255, 255, 255, 255, 255, 255,
+        ]), 2, 2);
+        const client = rastermill.createRastermill({ execution: "internal" });
+        const info = await client.probe(input);
+        assert.deepEqual([info.format, info.width, info.height], ["png", 2, 2]);
+        const alpha = await client.transparency(input);
+        assert.equal(alpha.hasAlphaChannel, true);
+        assert.equal(alpha.hasTransparentPixels, true);
+        const jpeg = await client.encode(input, { format: "jpeg", resize: { maxSide: 1 } });
+        assert.deepEqual([jpeg.width, jpeg.height, jpeg.metadata], [1, 1, "stripped"]);
+        const encoded = await client.probe(jpeg.data);
+        assert.deepEqual([encoded.format, encoded.width, encoded.height], ["jpeg", 1, 1]);
+        console.log("Installed package smoke passed");
+        JS

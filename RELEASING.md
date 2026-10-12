@@ -1,46 +1,87 @@
 # Releasing Rastermill
 
-Rastermill is published manually to npm and GitHub. There is no tag-triggered
-release workflow; merging a version bump alone does not publish a release.
+Rastermill publishes the `rastermill` npm package and a GitHub Release through
+[`release-npm-package.yml@v1`](https://github.com/openclaw/release-workflows/blob/v1/.github/workflows/release-npm-package.yml).
+There are no native release binaries, Homebrew formulas, or Sparkle artifacts.
+Do not publish from a local checkout; Actions owns both destinations.
 
 ## Prepare
 
-1. Compare the latest npm version and GitHub release with `CHANGELOG.md`. Include
-   any previously prepared but unpublished changes. Use a minor bump for new
-   features or compatibility changes, and a patch bump for fixes alone.
-2. Update `package.json` and move the pending changelog entries into a dated
-   version section with a short **Highlights** paragraph. Keep an empty
-   `## Unreleased` section above it.
-3. Run the package gates with the pinned pnpm version:
+Compare npm and GitHub with `CHANGELOG.md` before choosing a version. Update
+`package.json` and finalize exactly one `## X.Y.Z - YYYY-MM-DD` section with a
+short `**Highlights:**` paragraph, keeping an empty `## Unreleased` above it.
+Use the repository's pinned pnpm 11.28.4:
 
-   ```sh
-   pnpm install --frozen-lockfile
-   pnpm prepublishOnly
-   pnpm docs:check
-   git diff --exit-code -- dist
-   pnpm pack --pack-destination /tmp/rastermill-pack
-   pnpm package:smoke
-   ```
+```sh
+pnpm install --frozen-lockfile
+pnpm check:release
+pnpm docs:check
+git diff --exit-code -- dist
+pnpm pack --pack-destination /path/to/fresh-pack-directory
+node scripts/package-smoke.mjs /path/to/fresh-pack-directory
+```
 
-   Use a fresh pack directory so the smoke test selects the intended version.
-   Commit generated build output whenever source changes. Review and merge the
-   release PR after Node 22/24 and both Windows workflows pass at its exact head.
+Commit generated `dist` changes with their sources. Review and merge the
+preparation PR after Node 22/24 and Windows checks pass. The release build
+installs ImageMagick and FFmpeg, reruns the gates, and packs the exact commit.
+Clean x64 and arm64 verifiers install the frozen tarball with lifecycle scripts
+disabled and exercise exports, declarations, PNG probing/transparency, and JPEG
+conversion/resizing.
 
-## Publish and verify
+## npm trusted publishing
 
-1. Update a clean `main` checkout to the merged release commit. Build and pack
-   that commit, then run `scripts/package-smoke.mjs` against the exact tarball.
-2. Create and push a signed `vX.Y.Z` tag at that commit.
-3. Authenticate to npm as a package maintainer and publish the tested tarball:
-   `npm publish /path/to/rastermill-X.Y.Z.tgz --access public --tag latest`.
-4. Verify `npm view rastermill@X.Y.Z version dist.tarball dist.integrity --json`,
-   the `latest` dist-tag, and its publication time. Download the registry tarball,
-   verify its integrity and packaged files against the tested artifact, and run
-   the installed-package smoke test again.
-5. Create a non-draft GitHub Release for the tag. Copy the version's changelog
-   section verbatim, then append links to the npm version, registry tarball, and
-   CI proof, plus the registry integrity and publication time. Use a notes file
-   so Markdown and shell metacharacters remain literal.
-6. Verify the published GitHub Release and npm version, leave `main` clean, and
-   remove temporary tarballs. A release is complete only when both destinations
-   are published and the release notes match the changelog.
+The existing `rastermill` package must trust GitHub repository
+`openclaw/rastermill`, caller filename `release.yml`, with publish permission.
+Registry administration uses the approved npm helper; no npm token belongs in
+GitHub Actions. Only the publisher receives `id-token: write`; it publishes the
+verified tarball via OIDC with provenance and lifecycle scripts disabled.
+
+Stable versions use `latest`; prereleases use `next`. Existing registry versions
+are never republished. Recovery accepts an existing version only when its
+integrity and downloaded bytes match the verified payload. If npm succeeded but
+GitHub publication failed, dispatch the same immutable signed tag with
+`dry_run=false`; do not change its code or retry publication from newer main.
+
+## Publish through Actions
+
+After the preparation PR and push CI pass on the exact merged commit, create a
+signed annotated `vX.Y.Z` tag using the release SSH key authorized by
+`.github/release-allowed-signers`, verify it, and push only that tag. Never move
+an existing tag or reuse a published version. The tag starts `Release`; do not
+publish locally or create a GitHub Release by hand.
+
+The shared workflow freezes the commit, checks protected-main ancestry, the SSH
+signature, version metadata, dated changelog notes, and green independent push
+CI. It then runs the checks below and binds the payload to two independent
+verifiers before publication. A live dispatch also requires an existing signed
+tag; it cannot silently substitute an unsigned tag.
+
+## No-publish rehearsal
+
+Dispatch `Release` on the current protected `main` with the version matching its
+metadata and a dated changelog section. `dry_run` defaults to `true`:
+
+```sh
+gh workflow run release.yml --repo openclaw/rastermill --ref main -f version=0.4.0 -F dry_run=true
+```
+
+This checks current main even when that version has an older tag. It neither
+creates nor changes tags, GitHub Releases, registry versions, or deployments.
+Only the release pipeline's checks run; ordinary push workflows remain separate.
+
+## Verify and close out
+
+Confirm the Actions run succeeded and the GitHub Release has the expected
+signed tag, frozen commit, exact dated changelog section, inventory, and
+`SHA256SUMS`. Download the attached payload and verify its checksums. Never
+replace an existing release's assets to fix a failed attempt.
+
+Keep the released changelog section intact. Open an empty `## Unreleased`
+section if one is absent, review and merge the follow-up, and leave `main` clean
+and current. No release is complete while its independent CI or publication
+verification is failing.
+
+Also verify npm's version, dist-tag, tarball, integrity, and publication time.
+The publisher verifies registry bytes, Sigstore signatures, and provenance
+against the frozen commit before creating the GitHub Release. Its assets include
+the tarball, package plan, exact release notes, inventory, and checksums.

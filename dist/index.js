@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -49,6 +50,7 @@ const CRC_TABLE = (() => {
     return table;
 })();
 let photonPromise = null;
+let photonDiscarded = false;
 /** Base error for validation, size-limit, undecodable-input, and backend-unavailable failures. */
 export class RastermillError extends Error {
     code;
@@ -899,8 +901,39 @@ function transformOrientation(rawPixels, width, height, orientation) {
     }
     return { pixels: out, width: outputWidth, height: outputHeight };
 }
+function isWasmTrap(error) {
+    const wasmRuntimeError = globalThis.WebAssembly?.RuntimeError;
+    if (!wasmRuntimeError) {
+        return false;
+    }
+    let current = error;
+    for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+        if (current instanceof wasmRuntimeError) {
+            return true;
+        }
+        current = current.cause;
+    }
+    return false;
+}
+/**
+ * A WebAssembly trap (for example a Rust panic on a malformed image) cannot unwind, so it leaks
+ * shadow-stack space and eventually corrupts the module's memory for every later call. Drop the
+ * poisoned instance so the next Photon use instantiates a fresh one.
+ */
+function discardPhotonAfterTrap(error) {
+    if (!isWasmTrap(error) || photonPromise === null) {
+        return;
+    }
+    photonPromise = null;
+    photonDiscarded = true;
+    const require = createRequire(import.meta.url);
+    // Photon 0.3.4 creates its WASM instance in this CommonJS entry point.
+    delete require.cache[require.resolve("@silvia-odwyer/photon-node")];
+}
 async function loadPhoton() {
-    photonPromise ??= import("@silvia-odwyer/photon-node").then((mod) => {
+    photonPromise ??= (photonDiscarded
+        ? Promise.resolve(createRequire(import.meta.url)("@silvia-odwyer/photon-node"))
+        : import("@silvia-odwyer/photon-node")).then((mod) => {
         if (typeof mod.PhotonImage?.new_from_byteslice !== "function" ||
             typeof mod.resize !== "function" ||
             typeof mod.crop !== "function" ||
@@ -1042,17 +1075,24 @@ function decodeGrayscaleAlphaPng(buffer) {
 async function loadOrientedPhotonImage(buffer, maxInputPixels, autoOrient = true, operation = "encode") {
     assertHeaderPixelBudget(buffer, maxInputPixels);
     assertPhotonDecodableHeader(buffer, operation);
-    const photon = await loadPhoton();
+    let photon = await loadPhoton();
     let decoded;
     try {
         decoded = photon.PhotonImage.new_from_byteslice(buffer);
     }
     catch (error) {
+        const trapped = isWasmTrap(error);
+        if (trapped) {
+            discardPhotonAfterTrap(error);
+        }
         const grayscaleAlpha = decodeGrayscaleAlphaPng(buffer);
         if (!grayscaleAlpha) {
             throw rastermillError("RASTERMILL_UNDECODABLE", "Unable to decode image with Photon", {
                 cause: error,
             });
+        }
+        if (trapped) {
+            photon = await loadPhoton();
         }
         decoded = new photon.PhotonImage(grayscaleAlpha.pixels, grayscaleAlpha.width, grayscaleAlpha.height);
     }
@@ -1391,6 +1431,9 @@ async function runWithBackends(format, options, backendOptions, fn) {
         catch (error) {
             backendOptions.signal?.throwIfAborted();
             errors.push(error);
+            if (backend === "photon") {
+                discardPhotonAfterTrap(error);
+            }
             const classification = classifyBackendError(error);
             if (classification === "unavailable")
                 continue;

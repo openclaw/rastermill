@@ -79,6 +79,10 @@ being mistaken for a missing tool.
 Failed Photon resize and crop operations release their image allocations before
 propagating the processing error.
 
+If malformed input triggers a Photon WebAssembly trap, Rastermill discards the
+affected instance. Later encode and transparency calls load a fresh instance,
+so rejecting an image does not permanently disable image processing.
+
 ## Validation errors
 
 Pixel-budget and option violations throw `RastermillError`s before any backend

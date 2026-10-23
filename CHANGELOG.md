@@ -4,7 +4,7 @@
 
 - Refresh pnpm 11, Node 22 types, Vitest, formatting/linting tools, and the Vite 7 peer; update transitive dependencies to clear development-tool security advisories.
 - Keep TIFF orientation paired with each page's dimensions, size encodes from the first page while checking the largest page against input limits, and apply TIFF transforms explicitly with FFmpeg (thanks @SebTardif, #20).
-- Replace the shared Photon WebAssembly instance after a trap (for example a Rust panic on malformed input) so repeated bad images no longer corrupt it and break every later encode (#23).
+- Replace the shared Photon WebAssembly instance after a trap (for example a Rust panic on malformed input) so rejected images cannot break later encode or transparency calls (thanks @parth-garg01, #23).
 
 ## 0.4.0 - 2026-09-24
 

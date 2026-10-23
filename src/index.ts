@@ -1371,17 +1371,9 @@ function discardPhotonAfterTrap(error: unknown): void {
   }
   photonPromise = null;
   photonDiscarded = true;
-  try {
-    const require = createRequire(import.meta.url);
-    const packageDir = path.dirname(require.resolve("@silvia-odwyer/photon-node"));
-    for (const key of Object.keys(require.cache)) {
-      if (key.startsWith(packageDir + path.sep)) {
-        delete require.cache[key];
-      }
-    }
-  } catch {
-    // Fall back to the existing instance if the module cache cannot be cleared.
-  }
+  const require = createRequire(import.meta.url);
+  // Photon 0.3.4 creates its WASM instance in this CommonJS entry point.
+  delete require.cache[require.resolve("@silvia-odwyer/photon-node")];
 }
 
 async function loadPhoton(): Promise<PhotonModule> {
@@ -1568,15 +1560,18 @@ async function loadOrientedPhotonImage(
   try {
     decoded = photon.PhotonImage.new_from_byteslice(buffer);
   } catch (error) {
-    if (isWasmTrap(error)) {
+    const trapped = isWasmTrap(error);
+    if (trapped) {
       discardPhotonAfterTrap(error);
-      photon = await loadPhoton();
     }
     const grayscaleAlpha = decodeGrayscaleAlphaPng(buffer);
     if (!grayscaleAlpha) {
       throw rastermillError("RASTERMILL_UNDECODABLE", "Unable to decode image with Photon", {
         cause: error,
       });
+    }
+    if (trapped) {
+      photon = await loadPhoton();
     }
     decoded = new photon.PhotonImage(
       grayscaleAlpha.pixels,

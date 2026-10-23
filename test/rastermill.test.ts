@@ -3132,12 +3132,26 @@ describe("Photon WebAssembly traps", () => {
       "47494638396101cc0100800000000000ffffff0cf90401000000002c00000000010001000002014400",
       "hex",
     );
-    for (let index = 0; index < 6000; index += 1) {
-      await expect(rastermill.encode(bad, { format: "png" })).rejects.toBeInstanceOf(
-        RastermillError,
-      );
+    const panicLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (let index = 0; index < 6000; index += 1) {
+        await expect(rastermill.encode(bad, { format: "png" })).rejects.toMatchObject({
+          code: "RASTERMILL_UNDECODABLE",
+        });
+      }
+    } finally {
+      panicLog.mockRestore();
     }
     await expect(rastermill.encode(good, { format: "png" })).resolves.toMatchObject({
+      format: "png",
+      width: 4,
+      height: 4,
+    });
+    await expect(rastermill.transparency(good)).resolves.toMatchObject({
+      hasAlphaChannel: true,
+      hasTransparentPixels: true,
+    });
+    await expect(createRastermill().encode(good, { format: "png" })).resolves.toMatchObject({
       format: "png",
       width: 4,
       height: 4,

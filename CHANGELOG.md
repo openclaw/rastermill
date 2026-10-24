@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-- Refresh pnpm 11, Node 22 types, Vitest, formatting/linting tools, and the Vite 7 peer; update transitive dependencies to clear development-tool security advisories.
-- Keep TIFF orientation paired with each page's dimensions, size encodes from the first page while checking the largest page against input limits, and apply TIFF transforms explicitly with FFmpeg (thanks @SebTardif, #20).
+## 0.4.1 - 2026-10-23
+
+**Highlights:** Recover cleanly after Photon WASM traps, preserve per-page TIFF orientation, and clear development-tool security advisories.
+
 - Replace the shared Photon WebAssembly instance after a trap (for example a Rust panic on malformed input) so rejected images cannot break later encode or transparency calls (thanks @parth-garg01, #23).
+- Keep TIFF orientation paired with each page's dimensions, size encodes from the first page while checking the largest page against input limits, and apply TIFF transforms explicitly with FFmpeg (thanks @SebTardif, #20).
+- Refresh pnpm 11, Node 22 types, Vitest, formatting/linting tools, and the Vite 7 peer; update transitive dependencies to clear development-tool security advisories.
 
 ## 0.4.0 - 2026-09-24
 

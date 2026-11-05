@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pin the reusable npm release workflow so retries find existing drafts and validate every release/asset listing page before writing.
+
 ## 0.4.1 - 2026-10-23
 
 **Highlights:** Recover cleanly after Photon WASM traps, preserve per-page TIFF orientation, and clear development-tool security advisories.
